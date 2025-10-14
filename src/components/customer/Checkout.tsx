@@ -98,6 +98,19 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
 
       alert(`Order placed successfully! Your order number is ${orderNumber}`);
       clearCart();
+      // Notify other parts of the app (and other tabs) that an order was placed
+      try {
+        localStorage.setItem('order_placed_at', Date.now().toString());
+      } catch {
+        // ignore storage errors
+      }
+      // Dispatch a custom event for same-tab listeners
+      try {
+        window.dispatchEvent(new Event('order_placed'));
+      } catch {
+        // ignore
+      }
+
       onBack();
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);

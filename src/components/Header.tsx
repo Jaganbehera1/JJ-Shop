@@ -1,7 +1,11 @@
+import { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
+import ProfileEdit from './ProfileEdit';
 
 export default function Header() {
   const { user, signOut } = useAuth();
+
+  const [editing, setEditing] = useState(false);
 
   return (
     <header className="bg-white border-b">
@@ -19,6 +23,13 @@ export default function Header() {
             {user ? (
               <>
                 <button
+                  onClick={() => setEditing(true)}
+                  title={user.email ?? 'Edit profile'}
+                  className="w-9 h-9 rounded-full bg-emerald-100 flex items-center justify-center text-emerald-700 font-semibold"
+                >
+                  {user.email ? user.email.charAt(0).toUpperCase() : 'U'}
+                </button>
+                <button
                   onClick={() => signOut()}
                   className="text-sm text-gray-700 hover:text-emerald-600"
                 >
@@ -31,6 +42,7 @@ export default function Header() {
           </div>
         </div>
       </div>
+      {editing && <ProfileEdit onClose={() => setEditing(false)} />}
     </header>
   );
 }

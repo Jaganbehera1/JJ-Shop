@@ -1,3 +1,4 @@
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
 import { User } from '@supabase/supabase-js';
 import { supabase, Profile } from '../lib/supabase';
@@ -10,6 +11,7 @@ type AuthContextType = {
   signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
   updateProfile: (updates: Partial<Profile>) => Promise<void>;
+  updateAuth: (updates: { email?: string; password?: string }) => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -122,6 +124,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile((prev) => (prev ? { ...prev, ...updates } : null));
   };
 
+  const updateAuth = async (updates: { email?: string; password?: string }) => {
+    if (!user) throw new Error('No user logged in');
+
+    const res = await supabase.auth.updateUser({
+      email: updates.email,
+      password: updates.password,
+    });
+
+    if (res.error) throw res.error;
+
+    // refresh session user if possible
+    try {
+      const { data: sessionData } = await supabase.auth.getSession();
+      setUser(sessionData.session?.user ?? user);
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <AuthContext.Provider
       value={{
@@ -132,6 +153,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         signIn,
         signOut,
         updateProfile,
+        updateAuth,
       }}
     >
       {children}

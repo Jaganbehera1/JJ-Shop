@@ -27,6 +27,38 @@ export function OrdersManagement() {
     };
   }, []);
 
+  // Poll for new orders when an order is placed (same-tab and cross-tab)
+  useEffect(() => {
+    let intervalId: number | null = null;
+    let attempts = 0;
+
+    const startPolling = () => {
+      if (intervalId !== null) return;
+      attempts = 0;
+      intervalId = window.setInterval(() => {
+        attempts += 1;
+        loadOrders();
+        if (attempts >= 12 && intervalId !== null) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      }, 5000);
+    };
+
+    const onOrder = () => startPolling();
+    window.addEventListener('order_placed', onOrder);
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'order_placed_at') startPolling();
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('order_placed', onOrder);
+      window.removeEventListener('storage', onStorage);
+      if (intervalId !== null) clearInterval(intervalId);
+    };
+  }, []);
+
   const loadOrders = async () => {
     setLoading(true);
     try {

@@ -52,6 +52,40 @@ export function CustomerApp() {
     };
   }, []); // REMOVED THE EXTRA CLOSING BRACE
 
+  // Polling: after an order is placed, poll loadData every 5s for 60s
+  useEffect(() => {
+    let intervalId: number | null = null;
+    let attempts = 0;
+
+    const startPolling = () => {
+      if (intervalId !== null) return; // already polling
+      attempts = 0;
+      intervalId = window.setInterval(() => {
+        attempts += 1;
+        loadData();
+        if (attempts >= 12 && intervalId !== null) {
+          clearInterval(intervalId);
+          intervalId = null;
+        }
+      }, 5000);
+    };
+
+    const onOrder = () => startPolling();
+
+    window.addEventListener('order_placed', onOrder);
+    // also check localStorage across tabs
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'order_placed_at') startPolling();
+    };
+    window.addEventListener('storage', onStorage);
+
+    return () => {
+      window.removeEventListener('order_placed', onOrder);
+      window.removeEventListener('storage', onStorage);
+      if (intervalId !== null) clearInterval(intervalId);
+    };
+  }, []);
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -85,16 +119,25 @@ export function CustomerApp() {
       setItems(itemsRes.data || []);
       // setShopLocation(shopLocationRes.data);
 
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error('Error loading data:', error);
-      
+
       // More specific error messages
-      if (error.code === '42501') {
-        alert('Permission denied. Please check RLS policies.');
-      } else if (error.code === '42P01') {
-        alert('Table does not exist. Please check your database setup.');
-      } else {
+      if (typeof error === 'object' && error !== null && 'code' in error) {
+        const e = error as Record<string, unknown>;
+        const code = String(e.code ?? '');
+        const msg = String(e.message ?? '');
+        if (code === '42501') {
+          alert('Permission denied. Please check RLS policies.');
+        } else if (code === '42P01') {
+          alert('Table does not exist. Please check your database setup.');
+        } else {
+          alert('Failed to load items: ' + msg);
+        }
+      } else if (error instanceof Error) {
         alert('Failed to load items: ' + error.message);
+      } else {
+        alert('Failed to load items');
       }
     } finally {
       setLoading(false);
