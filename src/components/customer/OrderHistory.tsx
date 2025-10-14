@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import ConfirmModal from '../ConfirmModal';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, Order, OrderItem } from '../../lib/supabase';
 import { Package, MapPin, Clock, CheckCircle, XCircle, TruckIcon } from 'lucide-react';
@@ -29,6 +30,48 @@ export function OrderHistory() {
       setLoading(false);
     }
   }, [user]);
+
+  // modal state
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalAction, setModalAction] = useState<'cancel' | 'delete' | null>(null);
+  const [modalOrderId, setModalOrderId] = useState<string | null>(null);
+
+  const openModal = (action: 'cancel' | 'delete', orderId: string) => {
+    setModalAction(action);
+    setModalOrderId(orderId);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setModalAction(null);
+    setModalOrderId(null);
+  };
+
+  const confirmModalAction = async () => {
+    if (!modalAction || !modalOrderId) return closeModal();
+    try {
+      if (modalAction === 'cancel') {
+        const { error } = await supabase.from('orders').update({ status: 'cancelled', delivery_boy_id: null }).eq('id', modalOrderId);
+        if (error) throw error;
+      } else if (modalAction === 'delete') {
+        const { error } = await supabase.from('orders').delete().eq('id', modalOrderId);
+        if (error) throw error;
+      }
+      try {
+        localStorage.setItem('order_updated_at', Date.now().toString());
+        window.dispatchEvent(new CustomEvent('order_updated'));
+      } catch (e) {
+        console.debug('Failed to signal order change', e);
+      }
+      await loadOrders();
+    } catch (err) {
+      console.error('Failed to perform action', err);
+      alert('Failed to perform action');
+    } finally {
+      closeModal();
+    }
+  };
 
   useEffect(() => {
     if (user) {
@@ -204,11 +247,41 @@ export function OrderHistory() {
                     <p className="font-mono text-lg text-gray-900 mt-1">{order.delivery_pin ?? '—'}</p>
                   </div>
                 )}
+
+                {/* Customer actions: Cancel (before accepted) and Delete (when pending/cancelled) */}
+                <div className="mt-4 flex gap-3">
+                  {order.status === 'pending' && (
+                    <button
+                      onClick={() => openModal('cancel', order.id)}
+                      className="bg-red-600 hover:bg-red-700 text-white px-4 py-2 rounded-lg"
+                    >
+                      Cancel Order
+                    </button>
+                  )}
+
+                  {(order.status === 'pending' || order.status === 'cancelled') && (
+                    <button
+                      onClick={() => openModal('delete', order.id)}
+                      className="bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg"
+                    >
+                      Delete Order
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           </div>
         ))}
       </div>
+
+      <ConfirmModal
+        open={modalOpen}
+        title={modalAction === 'cancel' ? 'Cancel Order' : 'Delete Order'}
+        description={modalAction === 'cancel' ? 'Are you sure you want to cancel this order?' : 'Delete this order? This cannot be undone.'}
+        onConfirm={confirmModalAction}
+        onCancel={closeModal}
+        confirmLabel={modalAction === 'cancel' ? 'Cancel Order' : 'Delete Order'}
+      />
     </div>
   );
 }

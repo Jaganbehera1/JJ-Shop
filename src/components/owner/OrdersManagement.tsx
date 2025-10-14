@@ -181,6 +181,13 @@ export function OrdersManagement() {
       const { error } = await supabase.from('orders').update({ delivery_boy_id: deliveryBoyId }).eq('id', orderId);
       if (error) throw error;
       await loadOrders();
+      // notify other tabs/components that an order was updated/assigned
+      try {
+        localStorage.setItem('order_updated_at', Date.now().toString());
+        window.dispatchEvent(new CustomEvent('order_updated'));
+      } catch (e) {
+        console.debug('Failed to signal order update', e);
+      }
     } catch (err) {
       console.error('Failed to assign delivery boy', err);
       alert('Failed to assign delivery boy');
@@ -206,6 +213,13 @@ export function OrdersManagement() {
     switch (status) {
       case 'pending':
         return 'bg-yellow-100 text-yellow-700';
+        // notify other tabs/components that an order status changed
+        try {
+          localStorage.setItem('order_updated_at', Date.now().toString());
+          window.dispatchEvent(new CustomEvent('order_updated'));
+        } catch (e) {
+          console.debug('Failed to signal order status update', e);
+        }
       case 'accepted':
         return 'bg-blue-100 text-blue-700';
       case 'delivered':

@@ -44,7 +44,17 @@ export default function DeliveryDashboard() {
       })
       .subscribe();
 
+    const onOrderUpdated = () => loadAssigned();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'order_updated_at') loadAssigned();
+    };
+
+    window.addEventListener('order_updated', onOrderUpdated as EventListener);
+    window.addEventListener('storage', onStorage as EventListener);
+
     return () => {
+      window.removeEventListener('order_updated', onOrderUpdated as EventListener);
+      window.removeEventListener('storage', onStorage as EventListener);
       supabase.removeChannel(channel);
     };
   }, [user, loadAssigned]);
@@ -82,14 +92,6 @@ export default function DeliveryDashboard() {
         <div>
           <button onClick={() => signOut()} className="text-sm text-gray-700">Logout</button>
         </div>
-      </div>
-
-      {/* DEBUG: show auth/profile ids so we can detect mismatches */}
-      <div className="mb-4 text-sm text-gray-600">
-        <div>Auth user id: <span className="font-mono">{user?.id}</span></div>
-        <div>Profile id: <span className="font-mono">{profile?.id ?? '—'}</span></div>
-        <div>Profile role: <span className="font-mono">{profile?.role ?? '—'}</span></div>
-        <div>Assigned orders fetched: <span className="font-mono">{orders.length}</span></div>
       </div>
 
       {orders.length === 0 ? (
