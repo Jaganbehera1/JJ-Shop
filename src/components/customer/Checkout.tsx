@@ -43,7 +43,9 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
 
     setLoading(true);
     try {
-      const orderNumber = `ORD${Date.now()}`;
+  const orderNumber = `ORD${Date.now()}`;
+  // Generate 6-digit delivery PIN
+  const deliveryPin = Math.floor(100000 + Math.random() * 900000).toString();
 
       // Build payload using conditional spreads so fields are omitted when null
       const payload = {
@@ -54,6 +56,7 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
         delivery_address: address,
         total_amount: totalAmount,
         status: 'pending',
+        delivery_pin: deliveryPin,
         ...(latitude !== null && longitude !== null && distance !== null
           ? { latitude, longitude, distance_km: distance }
           : {}),
@@ -96,7 +99,7 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
           .eq('id', user.id);
       }
 
-      alert(`Order placed successfully! Your order number is ${orderNumber}`);
+  alert(`Order placed successfully! Your order number is ${orderNumber}. Delivery PIN: ${deliveryPin}`);
       clearCart();
       // Notify other parts of the app (and other tabs) that an order was placed
       try {

@@ -5,6 +5,7 @@ import { getCurrentPosition } from '../lib/location';
 import { LogOut, Package, ShoppingBag, MapPin } from 'lucide-react';
 import { ItemsManagement } from '../components/owner/ItemsManagement';
 import { OrdersManagement } from '../components/owner/OrdersManagement';
+import DeliveryUserForm from '../components/owner/DeliveryUserForm';
 
 export function OwnerDashboard() {
   const { signOut, profile } = useAuth();
@@ -147,7 +148,10 @@ export function OwnerDashboard() {
             </div>
 
             {activeTab === 'items' ? (
-              <ItemsManagement />
+              <div className="space-y-6">
+                <ItemsManagement />
+                <DeliveryUserForm />
+              </div>
             ) : (
               <OrdersManagement />
             )}

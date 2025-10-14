@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase, Order, OrderItem } from '../../lib/supabase';
 import { Package, MapPin, Phone, User, Clock, CheckCircle, XCircle, TruckIcon } from 'lucide-react';
 import { formatDistance } from '../../lib/location';
@@ -7,6 +7,44 @@ export function OrdersManagement() {
   const [orders, setOrders] = useState<(Order & { order_items: OrderItem[] })[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'pending' | 'accepted' | 'delivered' | 'cancelled'>('all');
+
+  const [deliveryBoys, setDeliveryBoys] = useState<{ id: string; full_name: string; phone?: string }[]>([]);
+  // cache for profile names fetched on-demand when an order references a delivery_boy_id
+  const [profileCache, setProfileCache] = useState<Record<string, { full_name?: string; phone?: string }>>({});
+  const loadDeliveryBoys = useCallback(async () => {
+    try {
+      const { data } = await supabase.from('profiles').select('id, full_name, phone').eq('role', 'delivery');
+      const list = (data as Array<{ id: string; full_name: string; phone?: string }>) || [];
+      console.debug('[OrdersManagement] fetched deliveryBoys:', list);
+      setDeliveryBoys(list);
+    } catch (e) {
+      console.error('Failed to load delivery boys', e);
+    }
+  }, []);
+
+  const loadOrders = useCallback(async () => {
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setOrders(data || []);
+      // ensure delivery users list is refreshed whenever orders load
+      try {
+        await loadDeliveryBoys();
+      } catch (e) {
+        console.warn('Failed to refresh delivery users after loading orders', e);
+      }
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      alert('Failed to load orders');
+    } finally {
+      setLoading(false);
+    }
+  }, [loadDeliveryBoys]);
 
   useEffect(() => {
     loadOrders();
@@ -25,7 +63,7 @@ export function OrdersManagement() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, []);
+  }, [loadOrders]);
 
   // Poll for new orders when an order is placed (same-tab and cross-tab)
   useEffect(() => {
@@ -57,31 +95,20 @@ export function OrdersManagement() {
       window.removeEventListener('storage', onStorage);
       if (intervalId !== null) clearInterval(intervalId);
     };
-  }, []);
+  }, [loadOrders]);
 
-  const loadOrders = async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*, order_items(*)')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setOrders(data || []);
-    } catch (error) {
-      console.error('Error loading orders:', error);
-      alert('Failed to load orders');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const updateOrderStatus = async (orderId: string, status: Order['status']) => {
     try {
+      // if cancelling, also clear any assigned delivery boy so they don't see the cancelled order
+      const payload: Record<string, unknown> = { status };
+      if (status === 'cancelled') {
+        (payload as Record<string, unknown>).delivery_boy_id = null;
+      }
+
       const { error } = await supabase
         .from('orders')
-        .update({ status })
+        .update(payload)
         .eq('id', orderId);
 
       if (error) throw error;
@@ -90,6 +117,85 @@ export function OrdersManagement() {
       console.error('Error updating order status:', error);
       alert('Failed to update order status');
     }
+  };
+  useEffect(() => {
+    // initial load and listen for cross-tab / component events to refresh list
+    loadDeliveryBoys();
+
+    const onCreated = () => loadDeliveryBoys();
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'delivery_user_created_at') loadDeliveryBoys();
+    };
+
+    window.addEventListener('delivery_user_created', onCreated as EventListener);
+    window.addEventListener('storage', onStorage as EventListener);
+    return () => {
+      window.removeEventListener('delivery_user_created', onCreated as EventListener);
+      window.removeEventListener('storage', onStorage as EventListener);
+    };
+  }, [loadDeliveryBoys]);
+
+  // If some orders reference a delivery_boy_id that's not present in deliveryBoys list,
+  // fetch those individual profiles and cache them so the UI can display the assigned name.
+  useEffect(() => {
+    const missingIds = new Set<string>();
+    orders.forEach((o) => {
+      if (o.delivery_boy_id && !deliveryBoys.find((d) => d.id === o.delivery_boy_id) && !profileCache[o.delivery_boy_id]) {
+        missingIds.add(o.delivery_boy_id);
+      }
+    });
+
+    if (missingIds.size === 0) return;
+
+    // fetch missing profiles in a single query
+    const ids = Array.from(missingIds);
+    (async () => {
+      try {
+        const { data, error } = await supabase.from('profiles').select('id, full_name, phone').in('id', ids);
+        if (error) throw error;
+        const next = { ...profileCache };
+            (data as Array<{ id: string; full_name?: string; phone?: string }> || []).forEach((p) => {
+              next[p.id] = { full_name: p.full_name, phone: p.phone };
+            });
+        setProfileCache(next);
+      } catch (e) {
+        console.warn('Failed to fetch missing delivery profile(s)', e);
+      }
+    })();
+  }, [orders, deliveryBoys, profileCache]);
+
+        // When profileCache gains entries, merge them into deliveryBoys so the select dropdown shows them
+        useEffect(() => {
+      const cachedProfiles = Object.entries(profileCache).map(([id, v]) => ({ id, full_name: v.full_name || '', phone: v.phone || undefined }));
+          if (cachedProfiles.length === 0) return;
+          // add any cached profiles that aren't already in deliveryBoys
+          const existingIds = new Set(deliveryBoys.map((d) => d.id));
+          const toAdd = cachedProfiles.filter((p) => !existingIds.has(p.id));
+          if (toAdd.length > 0) {
+            setDeliveryBoys((prev) => [...prev, ...toAdd]);
+          }
+        }, [profileCache, deliveryBoys]);
+
+  const assignDeliveryBoy = async (orderId: string, deliveryBoyId: string | null) => {
+    try {
+      const { error } = await supabase.from('orders').update({ delivery_boy_id: deliveryBoyId }).eq('id', orderId);
+      if (error) throw error;
+      await loadOrders();
+    } catch (err) {
+      console.error('Failed to assign delivery boy', err);
+      alert('Failed to assign delivery boy');
+    }
+  };
+
+  const tryMarkDeliveredWithPin = async (orderId: string, expectedPin?: string | null) => {
+    const pin = prompt('Enter 6-digit delivery PIN to confirm delivery');
+    if (!pin) return;
+    if (expectedPin && pin !== expectedPin) {
+      alert('PIN mismatch');
+      return;
+    }
+
+    await updateOrderStatus(orderId, 'delivered');
   };
 
   const filteredOrders = filter === 'all'
@@ -153,6 +259,18 @@ export function OrdersManagement() {
             </button>
           ))}
         </div>
+      </div>
+
+      {/* DEBUG: show fetched delivery boys */}
+      <div className="mb-4 text-sm text-gray-600">
+        <strong>Delivery users fetched:</strong> {deliveryBoys.length}
+        {deliveryBoys.length > 0 && (
+          <div className="mt-1">
+            {deliveryBoys.slice(0, 5).map((d) => (
+              <div key={d.id} className="inline-block mr-3">{d.full_name || d.phone}</div>
+            ))}
+          </div>
+        )}
       </div>
 
       {filteredOrders.length === 0 ? (
@@ -249,7 +367,48 @@ export function OrdersManagement() {
                 </div>
               </div>
 
-              {order.status === 'pending' && (
+              <div className="px-6 pb-6">
+                <div className="flex items-center gap-4 mb-3">
+                  <div>
+                    <p className="text-sm text-gray-600">Delivery PIN</p>
+                    <p className="font-mono text-lg text-gray-900">{order.delivery_pin ?? '—'}</p>
+                  </div>
+
+                  <div className="flex-1">
+                    <label className="block text-sm text-gray-600">Assign Delivery Boy</label>
+                    <select
+                      value={order.delivery_boy_id ?? ''}
+                      onChange={(e) => assignDeliveryBoy(order.id, e.target.value || null)}
+                      className="mt-1 w-full border rounded px-3 py-2"
+                    >
+                      <option value="">Unassigned</option>
+                      {deliveryBoys.map((db) => (
+                        <option key={db.id} value={db.id}>{db.full_name || db.phone}</option>
+                      ))}
+                    </select>
+                    {order.delivery_boy_id && (
+                      <div className="mt-2 text-sm text-gray-700">
+                        Assigned to: {
+                          deliveryBoys.find(db => db.id === order.delivery_boy_id)?.full_name ||
+                          deliveryBoys.find(db => db.id === order.delivery_boy_id)?.phone ||
+                          'Unknown'
+                        }
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="w-48">
+                    <button
+                      onClick={() => tryMarkDeliveredWithPin(order.id, order.delivery_pin)}
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg"
+                    >
+                      Deliver (PIN)
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {(order.status === 'pending') && (
                 <div className="flex gap-3">
                   <button
                     onClick={() => updateOrderStatus(order.id, 'accepted')}
@@ -268,7 +427,7 @@ export function OrdersManagement() {
                 </div>
               )}
 
-              {order.status === 'accepted' && (
+              {(!order.delivery_boy_id && order.status === 'accepted') && (
                 <button
                   onClick={() => updateOrderStatus(order.id, 'delivered')}
                   className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"

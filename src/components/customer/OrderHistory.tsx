@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { supabase, Order, OrderItem } from '../../lib/supabase';
 import { Package, MapPin, Clock, CheckCircle, XCircle, TruckIcon } from 'lucide-react';
@@ -8,6 +8,27 @@ export function OrderHistory() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<(Order & { order_items: OrderItem[] })[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const loadOrders = useCallback(async () => {
+    if (!user) return;
+
+    setLoading(true);
+    try {
+      const { data, error } = await supabase
+        .from('orders')
+        .select('*, order_items(*)')
+        .eq('customer_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) throw error;
+      setOrders(data || []);
+    } catch (error) {
+      console.error('Error loading orders:', error);
+      alert('Failed to load orders');
+    } finally {
+      setLoading(false);
+    }
+  }, [user]);
 
   useEffect(() => {
     if (user) {
@@ -33,28 +54,9 @@ export function OrderHistory() {
         supabase.removeChannel(channel);
       };
     }
-  }, [user]);
+  }, [user, loadOrders]);
 
-  const loadOrders = async () => {
-    if (!user) return;
-
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*, order_items(*)')
-        .eq('customer_id', user.id)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setOrders(data || []);
-    } catch (error) {
-      console.error('Error loading orders:', error);
-      alert('Failed to load orders');
-    } finally {
-      setLoading(false);
-    }
-  };
+  // loadOrders is declared above using useCallback
 
   const getStatusColor = (status: Order['status']) => {
     switch (status) {
@@ -196,6 +198,12 @@ export function OrderHistory() {
                     </div>
                   ))}
                 </div>
+                {order.delivery_boy_id && (
+                  <div className="mt-4">
+                    <p className="text-sm font-medium text-gray-700">Delivery PIN</p>
+                    <p className="font-mono text-lg text-gray-900 mt-1">{order.delivery_pin ?? '—'}</p>
+                  </div>
+                )}
               </div>
             </div>
           </div>

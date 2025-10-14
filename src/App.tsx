@@ -5,6 +5,7 @@ import { OwnerDashboard } from './pages/OwnerDashboard';
 import { CustomerApp } from './pages/CustomerApp';
 import Header from './components/Header';
 import Footer from './components/Footer';
+import DeliveryDashboard from './pages/DeliveryDashboard';
 
 function AppContent() {
   const { user, profile, loading } = useAuth();
@@ -26,6 +27,10 @@ function AppContent() {
 
   if (profile.role === 'owner') {
     return <OwnerDashboard />;
+  }
+
+  if (profile.role === 'delivery') {
+    return <DeliveryDashboard />;
   }
 
   return <CustomerApp />;

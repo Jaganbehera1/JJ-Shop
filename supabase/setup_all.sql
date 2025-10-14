@@ -11,7 +11,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- Profiles table (extends auth.users)
 CREATE TABLE IF NOT EXISTS profiles (
   id uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
-  role text NOT NULL CHECK (role IN ('owner', 'customer')),
+  role text NOT NULL CHECK (role IN ('owner', 'customer', 'delivery')),
   full_name text NOT NULL,
   phone text NOT NULL,
   address text,

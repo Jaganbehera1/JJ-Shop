@@ -11,7 +11,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey);
 
 export type Profile = {
   id: string;
-  role: 'owner' | 'customer';
+  role: 'owner' | 'customer' | 'delivery';
   full_name: string;
   phone: string;
   address?: string;
@@ -53,6 +53,8 @@ export type Order = {
   customer_name: string;
   customer_phone: string;
   delivery_address: string;
+  delivery_pin?: string | null;
+  delivery_boy_id?: string | null;
   latitude: number;
   longitude: number;
   distance_km: number;

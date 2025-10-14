@@ -3,7 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { LogIn, UserPlus } from 'lucide-react';
 
 type AuthFormProps = {
-  mode: 'owner' | 'customer';
+  mode: 'owner' | 'customer' | 'delivery';
 };
 
 export function AuthForm({ mode }: AuthFormProps) {
@@ -35,9 +35,9 @@ export function AuthForm({ mode }: AuthFormProps) {
         if (!emailRegex.test(emailTrim)) {
           throw new Error('Please enter a valid email address');
         }
-        if (mode === 'owner') {
-          // Prevent open owner registration
-          throw new Error('Owner accounts must be created by an admin. Please contact support.');
+        if (mode === 'owner' || mode === 'delivery') {
+          // Prevent open owner/delivery registration
+          throw new Error(`${mode === 'owner' ? 'Owner' : 'Delivery'} accounts must be created by an admin. Please contact support.`);
         }
         await signUp(emailTrim, passwordTrim, fullName.trim(), phone.trim(), mode);
       } else {

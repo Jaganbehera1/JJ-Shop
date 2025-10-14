@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { supabase, Item, Category } from '../../lib/supabase';
 import { X, Plus, Trash2, Upload } from 'lucide-react';
 
@@ -24,15 +24,7 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
 
-  useEffect(() => {
-    if (item) {
-      loadVariants();
-    } else {
-      setVariants([{ quantity_unit: '', price: '' }]);
-    }
-  }, [item]);
-
-  const loadVariants = async () => {
+  const loadVariants = useCallback(async () => {
     if (!item) return;
     try {
       const { data, error } = await supabase
@@ -49,10 +41,20 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           price: v.price.toString(),
         }))
       );
-    } catch (error) {
-      console.error('Error loading variants:', error);
+    } catch (err) {
+      console.error('Error loading variants:', err);
     }
-  };
+  }, [item]);
+
+  useEffect(() => {
+    if (item) {
+      loadVariants();
+    } else {
+      setVariants([{ quantity_unit: '', price: '' }]);
+    }
+  }, [item, loadVariants]);
+
+  // duplicate loadVariants removed (useCallback version above is used)
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -77,10 +79,10 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
 
       const { data } = supabase.storage.from('images').getPublicUrl(filePath);
       setImageUrl(data.publicUrl);
-    } catch (error: any) {
-      console.error('Error uploading image:', error);
+    } catch (err: unknown) {
+      console.error('Error uploading image:', err);
       // Supabase may return StorageApiError: Bucket not found
-      const message = error?.message || String(error);
+      const message = err instanceof Error ? err.message : String(err);
       if (message && message.toLowerCase().includes('bucket not found')) {
         alert(
           'Upload failed: storage bucket "images" not found in Supabase. Create a bucket named "images" in your Supabase project (Storage → New bucket) and make it public or configure appropriate policies, then try again. Alternatively you can paste an image URL in the field below.'
