@@ -14,6 +14,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
 
   const { signIn, signUp } = useAuth();
@@ -40,6 +41,14 @@ export function AuthForm({ mode }: AuthFormProps) {
           throw new Error(`${mode === 'owner' ? 'Owner' : 'Delivery'} accounts must be created by an admin. Please contact support.`);
         }
         await signUp(emailTrim, passwordTrim, fullName.trim(), phone.trim(), mode);
+        // show a friendly success message and switch to login mode
+        setSuccess('Sign up successful. Please check your email to confirm your account (if required) or login.');
+        // reset inputs and switch to login view
+        setFullName('');
+        setPhone('');
+        setEmail('');
+        setPassword('');
+        setIsSignUp(false);
       } else {
         await signIn(emailTrim, passwordTrim);
       }
@@ -50,6 +59,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       const maybeObj = err as { message?: string; details?: unknown } | null;
       if (maybeObj && maybeObj.message) msg = maybeObj.message;
       setError(msg || 'Authentication failed');
+  setSuccess('');
       // Store raw error for dev debugging
       if (import.meta.env.MODE !== 'production') {
         setRawError(maybeObj?.details ?? err);
@@ -142,6 +152,12 @@ export function AuthForm({ mode }: AuthFormProps) {
           {error && (
             <div className="p-4 bg-red-50 border border-red-200 rounded-lg">
               <p className="text-sm text-red-600">{error}</p>
+            </div>
+          )}
+
+          {success && (
+            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-lg">
+              <p className="text-sm text-emerald-700">{success}</p>
             </div>
           )}
 
