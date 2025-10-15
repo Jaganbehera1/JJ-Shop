@@ -18,7 +18,7 @@ export function Landing() {
       <div className="max-w-4xl w-full">
         <div className="text-center mb-12">
           <h1 className="text-5xl font-bold text-gray-900 mb-4">
-            Local Ration Shop
+            JJ Ration Shop
           </h1>
           <p className="text-xl text-gray-700">
             Fresh groceries delivered to your doorstep
