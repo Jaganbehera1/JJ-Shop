@@ -529,71 +529,73 @@ export function OrdersManagement() {
                 </div>
               </div>
 
-              <div className="px-6 pb-6">
-                <div className="flex items-center gap-4 mb-3">
-                  <div>
-                    <p className="text-sm text-gray-600">Delivery PIN</p>
-                    <p className="font-mono text-lg text-gray-900">{order.delivery_pin ?? '—'}</p>
-                  </div>
+              {order.status !== 'delivered' && (
+                <div className="px-6 pb-6">
+                  <div className="flex items-center gap-4 mb-3">
+                    <div>
+                      <p className="text-sm text-gray-600">Delivery PIN</p>
+                      <p className="font-mono text-lg text-gray-900">{order.delivery_pin ?? '—'}</p>
+                    </div>
 
-                  <div className="flex-1">
-                    <label className="block text-sm text-gray-600">Assign Delivery Boy</label>
-                    <select
-                      value={order.delivery_boy_id ?? ''}
-                      onChange={(e) => assignDeliveryBoy(order.id, e.target.value || null)}
-                      className="mt-1 w-full border rounded px-3 py-2"
-                    >
-                      <option value="">Unassigned</option>
-                      {deliveryBoys.map((db) => (
-                        <option key={db.id} value={db.id}>{db.full_name || db.phone}</option>
-                      ))}
-                    </select>
-                    {order.delivery_boy_id && (
-                      <div className="mt-2 text-sm text-gray-700">
-                        Assigned to: {
-                          deliveryBoys.find(db => db.id === order.delivery_boy_id)?.full_name ||
-                          deliveryBoys.find(db => db.id === order.delivery_boy_id)?.phone ||
-                          'Unknown'
-                        }
-                      </div>
+                    <div className="flex-1">
+                      <label className="block text-sm text-gray-600">Assign Delivery Boy</label>
+                      <select
+                        value={order.delivery_boy_id ?? ''}
+                        onChange={(e) => assignDeliveryBoy(order.id, e.target.value || null)}
+                        className="mt-1 w-full border rounded px-3 py-2"
+                      >
+                        <option value="">Unassigned</option>
+                        {deliveryBoys.map((db) => (
+                          <option key={db.id} value={db.id}>{db.full_name || db.phone}</option>
+                        ))}
+                      </select>
+                      {order.delivery_boy_id && (
+                        <div className="mt-2 text-sm text-gray-700">
+                          Assigned to: {
+                            deliveryBoys.find(db => db.id === order.delivery_boy_id)?.full_name ||
+                            deliveryBoys.find(db => db.id === order.delivery_boy_id)?.phone ||
+                            'Unknown'
+                          }
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="w-48">
+                      <button
+                        onClick={() => tryMarkDeliveredWithPin(order.id, order.delivery_pin)}
+                        className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg"
+                      >
+                        Deliver (PIN)
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex gap-3 mt-4">
+                    {editingOrderId === order.id ? (
+                      <>
+                        <button
+                          onClick={() => saveEditedQuantities(order)}
+                          className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                        >
+                          Save Changes
+                        </button>
+                        <button
+                          onClick={cancelEditing}
+                          className="flex-1 flex items-center justify-center gap-2 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors"
+                        >
+                          Cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => startEditingOrder(order)}
+                        className="flex-1 flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                      >
+                        Edit Quantities
+                      </button>
                     )}
                   </div>
-
-                  <div className="w-48">
-                    <button
-                      onClick={() => tryMarkDeliveredWithPin(order.id, order.delivery_pin)}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg"
-                    >
-                      Deliver (PIN)
-                    </button>
-                  </div>
                 </div>
-                <div className="flex gap-3 mt-4">
-                  {editingOrderId === order.id ? (
-                    <>
-                      <button
-                        onClick={() => saveEditedQuantities(order)}
-                        className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                      >
-                        Save Changes
-                      </button>
-                      <button
-                        onClick={cancelEditing}
-                        className="flex-1 flex items-center justify-center gap-2 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors"
-                      >
-                        Cancel
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => startEditingOrder(order)}
-                      className="flex-1 flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
-                    >
-                      Edit Quantities
-                    </button>
-                  )}
-                </div>
-              </div>
+              )}
 
               {(order.status === 'pending') && (
                 <div className="flex gap-3">
