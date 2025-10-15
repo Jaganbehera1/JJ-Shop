@@ -8,6 +8,11 @@ export function OrdersManagement() {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<'all' | 'pending' | 'accepted' | 'delivered' | 'cancelled'>('all');
 
+  // Edit-quantities state: which order is being edited, current edited quantities, and variant stock map
+  const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
+  const [editedQuantities, setEditedQuantities] = useState<Record<string, number>>({});
+  const [variantStock, setVariantStock] = useState<Record<string, number>>({});
+
   const [deliveryBoys, setDeliveryBoys] = useState<{ id: string; full_name: string; phone?: string }[]>([]);
   // cache for profile names fetched on-demand when an order references a delivery_boy_id
   const [profileCache, setProfileCache] = useState<Record<string, { full_name?: string; phone?: string }>>({});
@@ -194,6 +199,134 @@ export function OrdersManagement() {
     }
   };
 
+  // Begin edit-quantities helpers
+  const startEditingOrder = async (order: Order & { order_items: OrderItem[] }) => {
+    setEditingOrderId(order.id);
+    const qtys: Record<string, number> = {};
+    order.order_items.forEach((it) => { qtys[it.id] = it.quantity; });
+    setEditedQuantities(qtys);
+
+    // fetch variant stock for involved variants
+    try {
+      const variantIds = order.order_items.map((it) => it.variant_id);
+      let data: unknown = null;
+      let error: unknown = null;
+      if (variantIds.length === 1) {
+        ({ data, error } = await supabase.from('item_variants').select('id, stock').eq('id', variantIds[0]));
+      } else {
+        ({ data, error } = await supabase.from('item_variants').select('id, stock').in('id', variantIds));
+      }
+      if (error) {
+        // try per-variant fallback (some environments may fail constructing the in() param)
+        const stockMap: Record<string, number> = {};
+        for (const vid of variantIds) {
+          try {
+            const { data: singleData, error: singleErr } = await supabase.from('item_variants').select('id, stock').eq('id', vid).limit(1).maybeSingle();
+            if (singleErr) {
+              console.warn('fallback fetch failed for variant', vid, String(singleErr));
+              continue;
+            }
+            if (singleData && (singleData as { id?: string; stock?: number }).id) stockMap[(singleData as { id?: string; stock?: number }).id as string] = (singleData as { id?: string; stock?: number }).stock ?? 0;
+          } catch (inner) {
+            console.warn('fallback fetch exception for variant', vid, String(inner));
+          }
+        }
+        setVariantStock(stockMap);
+        throw error;
+      }
+      const stockMap: Record<string, number> = {};
+      (data as Array<{ id: string; stock?: number }> || []).forEach((v) => { stockMap[v.id] = v.stock ?? 0; });
+      setVariantStock(stockMap);
+    } catch (err) {
+      // stringify safely
+      let msg = '';
+      try { msg = JSON.stringify(err); } catch { msg = String(err); }
+      console.warn('Failed to fetch variant stock', msg);
+      setVariantStock({});
+    }
+  };
+
+  const cancelEditing = () => {
+    setEditingOrderId(null);
+    setEditedQuantities({});
+    setVariantStock({});
+  };
+
+  const changeEditedQuantity = (orderItemId: string, value: number) => {
+    setEditedQuantities((prev) => ({ ...prev, [orderItemId]: Math.max(0, Math.floor(value)) }));
+  };
+
+  const saveEditedQuantities = async (order: Order & { order_items: OrderItem[] }) => {
+    if (!editingOrderId) return;
+    try {
+      // Build updates for order_items: cap quantities to variantStock where available
+      const updates: Array<{ id: string; quantity: number; subtotal: number }> = [];
+      let newTotal = 0;
+      const changes: Array<{ item_id: string; item_name: string; oldQty: number; newQty: number }> = [];
+      for (const it of order.order_items) {
+        const requested = editedQuantities[it.id] ?? it.quantity;
+        const maxAvailable = variantStock[it.variant_id] ?? Infinity;
+        const finalQty = Math.min(requested, maxAvailable);
+        const subtotal = finalQty * it.price;
+        updates.push({ id: it.id, quantity: finalQty, subtotal });
+        newTotal += subtotal;
+        if (finalQty !== it.quantity) {
+          changes.push({ item_id: it.id, item_name: it.item_name, oldQty: it.quantity, newQty: finalQty });
+        }
+      }
+
+      // perform updates in a transaction-like manner: update each order_item and then order total
+      for (const u of updates) {
+        const res = (await supabase.from('order_items').update({ quantity: u.quantity, subtotal: u.subtotal }).eq('id', u.id).select('id,quantity,subtotal')) as { data?: unknown; error?: unknown };
+        console.debug('[OrdersManagement] update order_item', u.id, res);
+        if (res.error) throw res.error;
+      }
+
+      const resOrderUpdate = (await supabase.from('orders').update({ total_amount: newTotal }).eq('id', order.id).select('id,total_amount')) as { data?: unknown; error?: unknown };
+      console.debug('[OrdersManagement] update order total', order.id, resOrderUpdate);
+      if (resOrderUpdate.error) throw resOrderUpdate.error;
+
+      // Update local state immediately so owner UI reflects changes without waiting for reload
+      setOrders((prev) => prev.map((o) => {
+        if (o.id !== order.id) return o;
+        const updatedItems = o.order_items.map((it) => {
+          const upd = updates.find((u) => u.id === it.id);
+          return upd ? { ...it, quantity: upd.quantity, subtotal: upd.subtotal } : it;
+        });
+        return { ...o, order_items: updatedItems, total_amount: newTotal };
+      }));
+
+      // reload orders in background and signal other tabs with a detailed payload including server-side order
+      let serverOrder: unknown = null;
+      try {
+        const { data: serverData } = await supabase.from('orders').select('*, order_items(*)').eq('id', order.id).maybeSingle();
+        serverOrder = serverData || null;
+      } catch (err) {
+        console.warn('Failed to fetch server order after update', String(err));
+      }
+      loadOrders().catch(() => {});
+      try {
+        const payload = { orderId: order.id, changedAt: Date.now(), note: 'owner_edited_quantities', changes, newTotal, serverOrder };
+        localStorage.setItem('order_updated_at', Date.now().toString());
+        // store a JSON payload customers can use to render details
+        localStorage.setItem('order_edited_payload', JSON.stringify(payload));
+        // dispatch a dedicated event for edited-order notifications and a generic order_updated event
+        window.dispatchEvent(new CustomEvent('order_edited', { detail: payload }));
+        window.dispatchEvent(new CustomEvent('order_updated', { detail: payload }));
+      } catch (err) {
+        console.warn('Failed to emit order_edited payload', String(err));
+      }
+
+      cancelEditing();
+    } catch (e) {
+      let msg = '';
+      try { msg = JSON.stringify(e); } catch { msg = String(e); }
+      console.error('Failed to save edited quantities', msg);
+      alert('Failed to save quantities: ' + (msg || 'unknown error'));
+    }
+  };
+  // End edit-quantities helpers
+
   const tryMarkDeliveredWithPin = async (orderId: string, expectedPin?: string | null) => {
     const pin = prompt('Enter 6-digit delivery PIN to confirm delivery');
     if (!pin) return;
@@ -370,11 +503,26 @@ export function OrdersManagement() {
                       <div>
                         <p className="font-medium text-gray-900">{item.item_name}</p>
                         <p className="text-sm text-gray-600">
-                          {item.quantity_unit} × {item.quantity}
+                          {item.quantity_unit} × {
+                            editingOrderId === order.id ? (
+                              <input
+                                type="number"
+                                min={0}
+                                value={editedQuantities[item.id] ?? item.quantity}
+                                onChange={(e) => changeEditedQuantity(item.id, Number(e.target.value))}
+                                className="w-20 border rounded px-2 py-1"
+                              />
+                            ) : (
+                              item.quantity
+                            )
+                          }
                         </p>
+                        {editingOrderId === order.id && (
+                          <p className="text-xs text-gray-500 mt-1">Available: {variantStock[item.variant_id] ?? '—'}</p>
+                        )}
                       </div>
                       <p className="font-semibold text-gray-900">
-                        ₹{item.subtotal.toFixed(2)}
+                        ₹{(editingOrderId === order.id ? ((editedQuantities[item.id] ?? item.quantity) * item.price) : item.subtotal).toFixed(2)}
                       </p>
                     </div>
                   ))}
@@ -419,6 +567,31 @@ export function OrdersManagement() {
                       Deliver (PIN)
                     </button>
                   </div>
+                </div>
+                <div className="flex gap-3 mt-4">
+                  {editingOrderId === order.id ? (
+                    <>
+                      <button
+                        onClick={() => saveEditedQuantities(order)}
+                        className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                      >
+                        Save Changes
+                      </button>
+                      <button
+                        onClick={cancelEditing}
+                        className="flex-1 flex items-center justify-center gap-2 bg-gray-200 hover:bg-gray-300 text-gray-800 px-4 py-2 rounded-lg font-semibold transition-colors"
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => startEditingOrder(order)}
+                      className="flex-1 flex items-center justify-center gap-2 bg-yellow-500 hover:bg-yellow-600 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
+                    >
+                      Edit Quantities
+                    </button>
+                  )}
                 </div>
               </div>
 

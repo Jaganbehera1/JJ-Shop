@@ -12,6 +12,7 @@ type VariantInput = {
   id?: string;
   quantity_unit: string;
   price: string;
+  stock?: number | string;
 };
 
 export function ItemForm({ item, categories, onClose }: ItemFormProps) {
@@ -39,6 +40,7 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           id: v.id,
           quantity_unit: v.quantity_unit,
           price: v.price.toString(),
+          stock: (v.stock ?? 0).toString(),
         }))
       );
     } catch (err) {
@@ -205,6 +207,7 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           item_id: itemId,
           quantity_unit: v.quantity_unit,
           price: parseFloat(v.price),
+          stock: parseInt((v.stock ?? '0') as string, 10) || 0,
         }));
 
       const existingVariants = variants
@@ -214,6 +217,7 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           item_id: itemId,
           quantity_unit: v.quantity_unit,
           price: parseFloat(v.price),
+          stock: parseInt((v.stock ?? '0') as string, 10) || 0,
         }));
 
       // Insert new variants

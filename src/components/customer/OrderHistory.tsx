@@ -9,6 +9,7 @@ export function OrderHistory() {
   const { user } = useAuth();
   const [orders, setOrders] = useState<(Order & { order_items: OrderItem[] })[]>([]);
   const [loading, setLoading] = useState(true);
+  const [orderNotifications, setOrderNotifications] = useState<Record<string, { message: string; changes?: Array<{ item_name: string; oldQty: number; newQty: number }>; newTotal?: number }>>({});
 
   const loadOrders = useCallback(async () => {
     if (!user) return;
@@ -99,6 +100,53 @@ export function OrderHistory() {
     }
   }, [user, loadOrders]);
 
+  // Listen for owner edits and storage events that include a JSON payload
+  useEffect(() => {
+    const handleEdited = (detail?: CustomEvent) => {
+      const raw = detail?.detail ?? (localStorage.getItem('order_edited_payload') ? JSON.parse(localStorage.getItem('order_edited_payload') as string) : null);
+      if (!raw || !raw.orderId) return;
+      const orderId = String(raw.orderId);
+  const changes = (raw.changes || []).map((c: { item_name?: string; oldQty?: number; newQty?: number }) => ({ item_name: String(c.item_name || ''), oldQty: Number(c.oldQty || 0), newQty: Number(c.newQty || 0) }));
+  const lines = changes.map((c: { item_name: string; oldQty: number; newQty: number }) => `${c.item_name}: ${c.oldQty} → ${c.newQty}`);
+      const message = lines.length > 0 ? `Shop owner updated your order: ${lines.join('; ')}` : 'Shop owner updated your order';
+      setOrderNotifications((prev) => ({ ...prev, [orderId]: { message, changes, newTotal: raw.newTotal } }));
+      // If serverOrder is present in payload, replace the local order so UI shows exact server values
+      if (raw.serverOrder && raw.serverOrder.id === orderId) {
+        try {
+          const server = raw.serverOrder as Order & { order_items: OrderItem[] };
+          setOrders((prev) => prev.map((o) => (o.id === orderId ? server : o)));
+        } catch {
+          // ignore malformed serverOrder
+        }
+      }
+      // auto-clear after 10s
+      setTimeout(() => {
+        setOrderNotifications((prev) => {
+          const next = { ...prev };
+          delete next[orderId];
+          return next;
+        });
+      }, 10000);
+      // reload that order
+      loadOrders();
+    };
+
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === 'order_edited_payload') handleEdited();
+      if (e.key === 'order_updated_at') loadOrders();
+    };
+
+    const onCustom = (e: Event) => handleEdited((e as CustomEvent).detail ? (e as CustomEvent) : undefined);
+
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('order_updated', onCustom as EventListener);
+
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('order_updated', onCustom as EventListener);
+    };
+  }, [loadOrders]);
+
   // loadOrders is declared above using useCallback
 
   const getStatusColor = (status: Order['status']) => {
@@ -177,6 +225,14 @@ export function OrderHistory() {
             className="bg-white rounded-xl shadow-sm overflow-hidden hover:shadow-md transition-shadow"
           >
             <div className="p-6">
+              {orderNotifications[order.id] && (
+                <div className="mb-4 p-3 bg-yellow-50 border-l-4 border-yellow-400 text-yellow-800 rounded">
+                  <div className="font-semibold">{orderNotifications[order.id].message}</div>
+                  {orderNotifications[order.id].newTotal !== undefined && (
+                    <div className="text-sm text-gray-700 mt-1">New total: ₹{Number(orderNotifications[order.id].newTotal).toFixed(2)}</div>
+                  )}
+                </div>
+              )}
               <div className="flex items-start justify-between mb-4">
                 <div>
                   <h3 className="text-lg font-bold text-gray-900 mb-1">
