@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
+import ConfirmModal from '../ConfirmModal';
+import { useAuth } from '../../contexts/AuthContext';
 import { supabase, Order, OrderItem } from '../../lib/supabase';
+import { sortOrdersByDate } from '../../utils/orders';
 import { Package, MapPin, Phone, User, Clock, CheckCircle, XCircle, TruckIcon } from 'lucide-react';
 import { formatDistance } from '../../lib/location';
 
@@ -11,54 +14,51 @@ export function OrdersManagement() {
   // Edit-quantities state: which order is being edited, current edited quantities, and variant stock map
   const [editingOrderId, setEditingOrderId] = useState<string | null>(null);
   const [editedQuantities, setEditedQuantities] = useState<Record<string, number>>({});
-  const [variantStock, setVariantStock] = useState<Record<string, number>>({});
 
   const [deliveryBoys, setDeliveryBoys] = useState<{ id: string; full_name: string; phone?: string }[]>([]);
   // cache for profile names fetched on-demand when an order references a delivery_boy_id
   const [profileCache, setProfileCache] = useState<Record<string, { full_name?: string; phone?: string }>>({});
   const loadDeliveryBoys = useCallback(async () => {
     try {
-      const { data } = await supabase.from('profiles').select('id, full_name, phone').eq('role', 'delivery');
-      const list = (data as Array<{ id: string; full_name: string; phone?: string }>) || [];
-      console.debug('[OrdersManagement] fetched deliveryBoys:', list);
+      const res = await supabase.from('profiles').select('id, full_name, phone').eq('role', 'delivery').get();
+      if (res.error) throw res.error;
+      const list = (res.data as Array<{ id: string; full_name: string; phone?: string }>) || [];
+  // fetched deliveryBoys
       setDeliveryBoys(list);
     } catch (e) {
       console.error('Failed to load delivery boys', e);
     }
   }, []);
 
-  const loadOrders = useCallback(async () => {
-    setLoading(true);
-    try {
-      const { data, error } = await supabase
-        .from('orders')
-        .select('*, order_items(*)')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setOrders(data || []);
-      // ensure delivery users list is refreshed whenever orders load
-      try {
-        await loadDeliveryBoys();
-      } catch (e) {
-        console.warn('Failed to refresh delivery users after loading orders', e);
-      }
-    } catch (error) {
-      console.error('Error loading orders:', error);
-      alert('Failed to load orders');
-    } finally {
-      setLoading(false);
-    }
-  }, [loadDeliveryBoys]);
+const loadOrders = useCallback(async () => {
+  setLoading(true);
+  try {
+    const res = await supabase
+      .from('orders')
+      .select('*, order_items(*)')
+      .get();
+    
+    if (res.error) throw res.error;
+    
+    // Always sort by newest first, regardless of database order
+    const sortedOrders = sortOrdersByDate(res.data || []);
+    setOrders(sortedOrders);
+  } catch (error) {
+    console.error('Error loading orders:', error);
+    alert('Failed to load orders');
+  } finally {
+    setLoading(false);
+  }
+}, [loadDeliveryBoys]);
 
   useEffect(() => {
     loadOrders();
 
     const channel = supabase
-      .channel('orders_changes')
+      .channel()
       .on(
         'postgres_changes',
-        { event: '*', schema: 'public', table: 'orders' },
+        { table: 'orders' },
         () => {
           loadOrders();
         }
@@ -111,12 +111,8 @@ export function OrdersManagement() {
         (payload as Record<string, unknown>).delivery_boy_id = null;
       }
 
-      const { error } = await supabase
-        .from('orders')
-        .update(payload)
-        .eq('id', orderId);
-
-      if (error) throw error;
+      const upd = await supabase.from('orders').update(payload).eq('id', orderId).get();
+      if (upd.error) throw upd.error;
       await loadOrders();
     } catch (error) {
       console.error('Error updating order status:', error);
@@ -156,10 +152,10 @@ export function OrdersManagement() {
     const ids = Array.from(missingIds);
     (async () => {
       try {
-        const { data, error } = await supabase.from('profiles').select('id, full_name, phone').in('id', ids);
-        if (error) throw error;
+        const res = await supabase.from('profiles').select('id, full_name, phone').in('id', ids).get();
+        if (res.error) throw res.error;
         const next = { ...profileCache };
-            (data as Array<{ id: string; full_name?: string; phone?: string }> || []).forEach((p) => {
+            ((res.data as Array<{ id: string; full_name?: string; phone?: string }>) || []).forEach((p) => {
               next[p.id] = { full_name: p.full_name, phone: p.phone };
             });
         setProfileCache(next);
@@ -183,15 +179,15 @@ export function OrdersManagement() {
 
   const assignDeliveryBoy = async (orderId: string, deliveryBoyId: string | null) => {
     try {
-      const { error } = await supabase.from('orders').update({ delivery_boy_id: deliveryBoyId }).eq('id', orderId);
-      if (error) throw error;
+  const res = await supabase.from('orders').update({ delivery_boy_id: deliveryBoyId }).eq('id', orderId).get();
+  if (res.error) throw res.error;
       await loadOrders();
       // notify other tabs/components that an order was updated/assigned
       try {
         localStorage.setItem('order_updated_at', Date.now().toString());
         window.dispatchEvent(new CustomEvent('order_updated'));
-      } catch (e) {
-        console.debug('Failed to signal order update', e);
+      } catch {
+        // ignore signaling errors
       }
     } catch (err) {
       console.error('Failed to assign delivery boy', err);
@@ -206,50 +202,13 @@ export function OrdersManagement() {
     order.order_items.forEach((it) => { qtys[it.id] = it.quantity; });
     setEditedQuantities(qtys);
 
-    // fetch variant stock for involved variants
-    try {
-      const variantIds = order.order_items.map((it) => it.variant_id);
-      let data: unknown = null;
-      let error: unknown = null;
-      if (variantIds.length === 1) {
-        ({ data, error } = await supabase.from('item_variants').select('id, stock').eq('id', variantIds[0]));
-      } else {
-        ({ data, error } = await supabase.from('item_variants').select('id, stock').in('id', variantIds));
-      }
-      if (error) {
-        // try per-variant fallback (some environments may fail constructing the in() param)
-        const stockMap: Record<string, number> = {};
-        for (const vid of variantIds) {
-          try {
-            const { data: singleData, error: singleErr } = await supabase.from('item_variants').select('id, stock').eq('id', vid).limit(1).maybeSingle();
-            if (singleErr) {
-              console.warn('fallback fetch failed for variant', vid, String(singleErr));
-              continue;
-            }
-            if (singleData && (singleData as { id?: string; stock?: number }).id) stockMap[(singleData as { id?: string; stock?: number }).id as string] = (singleData as { id?: string; stock?: number }).stock ?? 0;
-          } catch (inner) {
-            console.warn('fallback fetch exception for variant', vid, String(inner));
-          }
-        }
-        setVariantStock(stockMap);
-        throw error;
-      }
-      const stockMap: Record<string, number> = {};
-      (data as Array<{ id: string; stock?: number }> || []).forEach((v) => { stockMap[v.id] = v.stock ?? 0; });
-      setVariantStock(stockMap);
-    } catch (err) {
-      // stringify safely
-      let msg = '';
-      try { msg = JSON.stringify(err); } catch { msg = String(err); }
-      console.warn('Failed to fetch variant stock', msg);
-      setVariantStock({});
-    }
+    // Owner edit: we do not enforce or fetch variant stock here. Owner can set quantities arbitrarily.
   };
 
   const cancelEditing = () => {
     setEditingOrderId(null);
     setEditedQuantities({});
-    setVariantStock({});
+    // variant stock is not used for owner edits
   };
 
   const changeEditedQuantity = (orderItemId: string, value: number) => {
@@ -264,9 +223,9 @@ export function OrdersManagement() {
       let newTotal = 0;
       const changes: Array<{ item_id: string; item_name: string; oldQty: number; newQty: number }> = [];
       for (const it of order.order_items) {
-        const requested = editedQuantities[it.id] ?? it.quantity;
-        const maxAvailable = variantStock[it.variant_id] ?? Infinity;
-        const finalQty = Math.min(requested, maxAvailable);
+    const requested = editedQuantities[it.id] ?? it.quantity;
+    // Owners may override stock limits; do not cap by variantStock when editing as owner
+    const finalQty = requested;
         const subtotal = finalQty * it.price;
         updates.push({ id: it.id, quantity: finalQty, subtotal });
         newTotal += subtotal;
@@ -277,14 +236,12 @@ export function OrdersManagement() {
 
       // perform updates in a transaction-like manner: update each order_item and then order total
       for (const u of updates) {
-        const res = (await supabase.from('order_items').update({ quantity: u.quantity, subtotal: u.subtotal }).eq('id', u.id).select('id,quantity,subtotal')) as { data?: unknown; error?: unknown };
-        console.debug('[OrdersManagement] update order_item', u.id, res);
-        if (res.error) throw res.error;
+  const res = (await supabase.from('order_items').update({ quantity: u.quantity, subtotal: u.subtotal }).eq('id', u.id).select('id,quantity,subtotal')) as { data?: unknown; error?: unknown };
+  if (res.error) throw res.error;
       }
 
-      const resOrderUpdate = (await supabase.from('orders').update({ total_amount: newTotal }).eq('id', order.id).select('id,total_amount')) as { data?: unknown; error?: unknown };
-      console.debug('[OrdersManagement] update order total', order.id, resOrderUpdate);
-      if (resOrderUpdate.error) throw resOrderUpdate.error;
+  const resOrderUpdate = (await supabase.from('orders').update({ total_amount: newTotal }).eq('id', order.id).select('id,total_amount')) as { data?: unknown; error?: unknown };
+  if (resOrderUpdate.error) throw resOrderUpdate.error;
 
       // Update local state immediately so owner UI reflects changes without waiting for reload
       setOrders((prev) => prev.map((o) => {
@@ -350,8 +307,8 @@ export function OrdersManagement() {
         try {
           localStorage.setItem('order_updated_at', Date.now().toString());
           window.dispatchEvent(new CustomEvent('order_updated'));
-        } catch (e) {
-          console.debug('Failed to signal order status update', e);
+        } catch {
+          // ignore signaling errors
         }
       case 'accepted':
         return 'bg-blue-100 text-blue-700';
@@ -408,17 +365,7 @@ export function OrdersManagement() {
         </div>
       </div>
 
-      {/* DEBUG: show fetched delivery boys */}
-      <div className="mb-4 text-sm text-gray-600">
-        <strong>Delivery users fetched:</strong> {deliveryBoys.length}
-        {deliveryBoys.length > 0 && (
-          <div className="mt-1">
-            {deliveryBoys.slice(0, 5).map((d) => (
-              <div key={d.id} className="inline-block mr-3">{d.full_name || d.phone}</div>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* delivery users count hidden in production */}
 
       {filteredOrders.length === 0 ? (
         <div className="bg-white rounded-xl shadow-sm p-12 text-center">
@@ -455,7 +402,16 @@ export function OrdersManagement() {
                     </span>
                   </div>
                   <p className="text-sm text-gray-500">
-                    {new Date(order.created_at).toLocaleString()}
+                    {order.created_at 
+                      ? new Date(order.created_at).toLocaleString('en-US', {
+                          year: 'numeric',
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                          hour12: true
+                        })
+                      : 'Processing...'}
                   </p>
                 </div>
                 <div className="text-right">
@@ -486,7 +442,7 @@ export function OrdersManagement() {
                     <p className="text-sm font-medium text-gray-700">Delivery Address</p>
                     <p className="text-sm text-gray-900">{order.delivery_address}</p>
                     <p className="text-xs text-gray-500 mt-1">
-                      Distance: {formatDistance(order.distance_km)}
+                      Distance: {order.distance_km ? formatDistance(order.distance_km) : 'Not available'}
                     </p>
                   </div>
                 </div>
@@ -517,9 +473,7 @@ export function OrdersManagement() {
                             )
                           }
                         </p>
-                        {editingOrderId === order.id && (
-                          <p className="text-xs text-gray-500 mt-1">Available: {variantStock[item.variant_id] ?? '—'}</p>
-                        )}
+                        {/* when owner edits, do not display available stock */}
                       </div>
                       <p className="font-semibold text-gray-900">
                         ₹{(editingOrderId === order.id ? ((editedQuantities[item.id] ?? item.quantity) * item.price) : item.subtotal).toFixed(2)}

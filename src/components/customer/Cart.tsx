@@ -10,11 +10,7 @@ type CartProps = {
 export function Cart({ onCheckout }: CartProps) {
   const { cart, removeFromCart, updateQuantity, totalAmount, clearCart } = useCart();
   const [modal, setModal] = useState<{ src: string; alt?: string } | null>(null);
-  console.log('Cart rendered, onCheckout function:', onCheckout);
-  console.log('Cart items:', cart.length);
-  console.log('Total amount:', totalAmount);
   const handleCheckout = () => {
-    console.log('Checkout button clicked');
     onCheckout(); // Call the passed function
   };
   if (cart.length === 0) {

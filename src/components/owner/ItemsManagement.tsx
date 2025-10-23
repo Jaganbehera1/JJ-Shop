@@ -19,22 +19,73 @@ export function ItemsManagement() {
   const loadData = async () => {
     setLoading(true);
     try {
+      // loadData called
       const [categoriesRes, itemsRes] = await Promise.all([
-        supabase.from('categories').select('*').order('name'),
+        supabase.from('categories').select('*').order('name').get(),
         supabase
           .from('items')
           .select('*, category:categories(*), variants:item_variants(*)')
-          .order('created_at', { ascending: false }),
+          .order('created_at', { ascending: false })
+          .get(),
       ]);
 
-      if (categoriesRes.error) throw categoriesRes.error;
-      if (itemsRes.error) throw itemsRes.error;
+      // Debug logging to help track why categories may be empty
+  // categoriesRes and itemsRes fetched
 
-      setCategories(categoriesRes.data || []);
-      setItems(itemsRes.data || []);
+      if (categoriesRes?.error) {
+        console.error('Categories fetch error', categoriesRes.error);
+        throw categoriesRes.error;
+      }
+      if (itemsRes?.error) {
+        console.error('Items fetch error', itemsRes.error);
+        throw itemsRes.error;
+      }
+
+  let cats = (categoriesRes?.data || []) as Category[];
+  const its = (itemsRes?.data || []) as (Item & { category: Category; variants: ItemVariant[] })[];
+  // removed debug logs
+
+      // If there are no categories in Firestore yet, insert a small default set
+      if (Array.isArray(cats) && cats.length === 0) {
+        console.info('[ItemsManagement] no categories found — seeding defaults');
+        try {
+          const defaultCats = [
+            { name: 'Rice' },
+            { name: 'Pulses' },
+            { name: 'Oils' },
+            { name: 'Spices' },
+            { name: 'Flour' },
+            { name: 'Dairy' },
+            { name: 'Snacks' },
+            { name: 'Beverages' },
+          ];
+          const insertRes = await supabase.from('categories').upsert(defaultCats as Partial<Category>[]).get();
+          if (insertRes.error) {
+            console.warn('[ItemsManagement] failed to seed categories', insertRes.error);
+          } else {
+            // re-fetch categories
+            const refetch = await supabase.from('categories').select('*').order('name').get();
+            cats = (refetch?.data || []) as Category[];
+          }
+        } catch {
+          console.warn('[ItemsManagement] seed error');
+        }
+      }
+
+      setCategories(cats);
+      setItems(its);
     } catch (error) {
       console.error('Error loading data:', error);
-      alert('Failed to load items');
+      let msg = String(error);
+      try {
+        if (typeof error === 'object' && error && 'message' in error) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          msg = String((error as any).message ?? msg);
+        }
+      } catch {
+        /* ignore */
+      }
+      alert('Failed to load items: ' + msg);
     } finally {
       setLoading(false);
     }
@@ -44,8 +95,8 @@ export function ItemsManagement() {
     if (!confirm('Are you sure you want to delete this item?')) return;
 
     try {
-      const { error } = await supabase.from('items').delete().eq('id', itemId);
-      if (error) throw error;
+  const delRes = await supabase.from('items').delete().eq('id', itemId).get();
+  if (delRes.error) throw delRes.error;
       await loadData();
     } catch (error) {
       console.error('Error deleting item:', error);
@@ -55,6 +106,24 @@ export function ItemsManagement() {
 
   const handleEdit = (item: Item) => {
     setEditingItem(item);
+    setShowForm(true);
+  };
+
+  const handleAddClick = async () => {
+    // Ensure categories are loaded before opening the form so the dropdown is populated
+    if (categories.length === 0) {
+      setLoading(true);
+      try {
+        const categoriesRes = await supabase.from('categories').select('*').order('name').get();
+        if (categoriesRes.error) throw categoriesRes.error;
+        setCategories((categoriesRes.data || []) as Category[]);
+      } catch (err) {
+        console.error('Error loading categories:', err);
+        alert('Failed to load categories');
+      } finally {
+        setLoading(false);
+      }
+    }
     setShowForm(true);
   };
 
@@ -87,7 +156,7 @@ export function ItemsManagement() {
       <div className="flex items-center justify-between mb-6">
         <h2 className="text-2xl font-bold text-gray-900">Grocery Items</h2>
         <button
-          onClick={() => setShowForm(true)}
+          onClick={handleAddClick}
           className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
         >
           <Plus className="w-5 h-5" />
@@ -104,8 +173,8 @@ export function ItemsManagement() {
           <p className="text-gray-600 mb-6">
             Start by adding your first grocery item
           </p>
-          <button
-            onClick={() => setShowForm(true)}
+            <button
+            onClick={handleAddClick}
             className="bg-emerald-600 hover:bg-emerald-700 text-white px-6 py-3 rounded-lg font-semibold transition-colors"
           >
             Add First Item
@@ -133,7 +202,7 @@ export function ItemsManagement() {
                     <h3 className="text-lg font-semibold text-gray-900">
                       {item.name}
                     </h3>
-                    <p className="text-sm text-gray-600">{item.category.name}</p>
+                    <p className="text-sm text-gray-600">{item.category?.name ?? 'Uncategorized'}</p>
                   </div>
                   <span
                     className={`px-2 py-1 text-xs font-semibold rounded-full ${
@@ -151,7 +220,7 @@ export function ItemsManagement() {
                     Available Sizes:
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    {item.variants.map((variant) => (
+                    {(item.variants || []).map((variant) => (
                       <span
                         key={variant.id}
                         className="px-3 py-1 bg-gray-100 text-gray-700 text-sm rounded-full"

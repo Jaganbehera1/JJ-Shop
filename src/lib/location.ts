@@ -36,7 +36,10 @@ export function getCurrentPosition(): Promise<GeolocationPosition> {
   });
 }
 
-export function formatDistance(km: number): string {
+export function formatDistance(km: number | null | undefined): string {
+  if (km == null) {
+    return 'Distance not available';
+  }
   if (km < 1) {
     return `${Math.round(km * 1000)} m`;
   }

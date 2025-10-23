@@ -13,6 +13,7 @@ export function AuthForm({ mode }: AuthFormProps) {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [phone, setPhone] = useState('');
+  const [ownerCode, setOwnerCode] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -36,9 +37,13 @@ export function AuthForm({ mode }: AuthFormProps) {
         if (!emailRegex.test(emailTrim)) {
           throw new Error('Please enter a valid email address');
         }
-        if (mode === 'owner' || mode === 'delivery') {
-          // Prevent open owner/delivery registration
-          throw new Error(`${mode === 'owner' ? 'Owner' : 'Delivery'} accounts must be created by an admin. Please contact support.`);
+        if (mode === 'owner') {
+          if (ownerCode !== 'ADMIN2025') {
+            throw new Error('Invalid owner code. Please contact support if you need access.');
+          }
+        } else if (mode === 'delivery') {
+          // Prevent open delivery registration
+          throw new Error('Delivery accounts must be created by an admin. Please contact support.');
         }
         await signUp(emailTrim, passwordTrim, fullName.trim(), phone.trim(), mode);
         // show a friendly success message and switch to login mode
@@ -74,7 +79,7 @@ export function AuthForm({ mode }: AuthFormProps) {
       <div className="bg-white rounded-2xl shadow-xl p-8">
         <div className="text-center mb-8">
           <h2 className="text-3xl font-bold text-gray-900 mb-2">
-            {mode === 'owner' ? 'Shop Owner' : 'Customer'} {isSignUp ? 'Sign Up' : 'Login'}
+            {mode === 'owner' ? 'Shop Owner' : mode === 'delivery' ? 'Delivery' : 'Customer'} {isSignUp ? 'Sign Up' : 'Login'}
           </h2>
           <p className="text-gray-600">
             {isSignUp ? 'Create your account' : 'Welcome back'}
@@ -111,6 +116,22 @@ export function AuthForm({ mode }: AuthFormProps) {
                   placeholder="Enter your phone number"
                 />
               </div>
+
+              {mode === 'owner' && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    Owner Code
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    value={ownerCode}
+                    onChange={(e) => setOwnerCode(e.target.value)}
+                    className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                    placeholder="Enter owner code"
+                  />
+                </div>
+              )}
             </>
           )}
 
@@ -119,12 +140,12 @@ export function AuthForm({ mode }: AuthFormProps) {
               Email
             </label>
             <input
-              type="email"
+                type="text"
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-              placeholder="Enter your email"
+                placeholder="Enter your email or phone number"
             />
           </div>
 
@@ -194,6 +215,8 @@ export function AuthForm({ mode }: AuthFormProps) {
               ? 'Already have an account? Login'
               : mode === 'owner'
               ? 'Owner registration disabled'
+              : mode === 'delivery'
+              ? 'Delivery registration disabled'
               : "Don't have an account? Sign Up"}
           </button>
         </div>

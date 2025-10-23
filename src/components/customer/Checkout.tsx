@@ -15,10 +15,16 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
   const { profile, user } = useAuth();
   const [fullName, setFullName] = useState(profile?.full_name || '');
   const [phone, setPhone] = useState(profile?.phone || '');
-  const [address, setAddress] = useState(profile?.address || '');
   const [loading, setLoading] = useState(false);
   const [latitude, setLatitude] = useState<number | null>(null);
   const [longitude, setLongitude] = useState<number | null>(null);
+  // Separate address fields
+  const [houseNo, setHouseNo] = useState('');
+  const [streetName, setStreetName] = useState('');
+  const [areaLandmark, setAreaLandmark] = useState('');
+  const [villageName, setVillageName] = useState('');
+  const [pinCode, setPinCode] = useState('');
+  const [nearbyLocation, setNearbyLocation] = useState('');
   const [distance, setDistance] = useState<number | null>(null);
   const [gettingLocation, setGettingLocation] = useState(false);
 
@@ -30,22 +36,39 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
       return;
     }
 
-    if (!address.trim()) {
-      alert('Please enter your delivery address');
+    if (!villageName.trim()) {
+      alert('Please enter your village name');
       return;
     }
 
-    // If user fetched location and distance is outside service area, block
-    if (distance !== null && distance > 5) {
-      alert('Sorry, delivery is not available in your area. You are outside our 5 km delivery radius.');
+    if (!streetName.trim()) {
+      alert('Please enter your street name');
       return;
     }
 
+    if (!pinCode.trim()) {
+      alert('Please enter your PIN code');
+      return;
+    }
+
+    // No distance-based blocking: customers can place orders from any location.
+    
     setLoading(true);
     try {
-  const orderNumber = `ORD${Date.now()}`;
-  // Generate 6-digit delivery PIN
-  const deliveryPin = Math.floor(100000 + Math.random() * 900000).toString();
+      const orderNumber = `ORD${Date.now()}`;
+      // Generate 6-digit delivery PIN
+      const deliveryPin = Math.floor(100000 + Math.random() * 900000).toString();
+
+      // Build the complete address string
+      const fullAddress = [
+        houseNo && `House/Flat/Shop No: ${houseNo}`,
+        streetName && `Street/Road Name: ${streetName}`,
+        areaLandmark && `Area/Landmark: ${areaLandmark}`,
+        villageName && `Village/City: ${villageName}`,
+        pinCode && `PIN Code: ${pinCode}`,
+        nearbyLocation && `Nearby Location: ${nearbyLocation}`,
+        latitude && longitude && `📍 GPS Location: ${latitude.toFixed(6)}, ${longitude.toFixed(6)}`
+      ].filter(Boolean).join('\n');
 
       // Build payload using conditional spreads so fields are omitted when null
       const payload = {
@@ -53,26 +76,26 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
         customer_id: user.id,
         customer_name: fullName,
         customer_phone: phone,
-        delivery_address: address,
+        delivery_address: fullAddress,
         total_amount: totalAmount,
         status: 'pending',
         delivery_pin: deliveryPin,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
         ...(latitude !== null && longitude !== null && distance !== null
           ? { latitude, longitude, distance_km: distance }
           : {}),
       } as Record<string, unknown>;
 
-      // Log the exact JSON payload that will be sent to the REST API
-      // so you can compare it with the Network tab.
-  console.log('Creating order payload (json):', JSON.stringify(payload));
+    // debug payload logging removed
 
-      const { data: order, error: orderError } = await supabase
+      const { data: orderData, error: orderError } = await supabase
         .from('orders')
-        .insert(payload)
-        .select()
-        .single();
+        .insert(payload);
+      const order = orderData ? orderData[0] : null;
 
       if (orderError) throw orderError;
+      if (!order) throw new Error('Failed to create order');
 
       const orderItems = cart.map((item) => ({
         order_id: order.id,
@@ -91,11 +114,11 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
 
       if (itemsError) throw itemsError;
 
-      // Update user profile with address if needed
-      if (profile && address !== profile.address) {
+      // Update user profile with full address if needed
+      if (profile && fullAddress !== profile.address) {
         await supabase
           .from('profiles')
-          .update({ address })
+          .update({ address: fullAddress })
           .eq('id', user.id);
       }
 
@@ -125,11 +148,6 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
   };
 
   const handleGetLocation = async () => {
-    if (!shopLocation) {
-      alert('Shop location not set by owner yet.');
-      return;
-    }
-
     setGettingLocation(true);
     try {
       const position = await getCurrentPosition();
@@ -139,11 +157,16 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
       setLatitude(lat);
       setLongitude(lng);
 
-      const dist = calculateDistance(shopLocation.latitude, shopLocation.longitude, lat, lng);
-      setDistance(dist);
+      // Only update the coordinates when getting location
+      setLatitude(lat);
+      setLongitude(lng);
 
-      if (dist > 5) {
-        alert(`Sorry, delivery is not available in your area. You are ${formatDistance(dist)} away from the shop. We only deliver within 5 km radius.`);
+      // Calculate distance if shop location is available
+      if (shopLocation) {
+        const dist = calculateDistance(shopLocation.latitude, shopLocation.longitude, lat, lng);
+        setDistance(dist);
+      } else {
+        setDistance(null);
       }
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -196,20 +219,93 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
             />
           </div>
 
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              Delivery Address *
-            </label>
-            <textarea
-              required
-              value={address}
-              onChange={(e) => setAddress(e.target.value)}
-              rows={4}
-              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
-              placeholder="Enter your complete delivery address (House number, Street, Area, Landmark, City, Pincode)"
-            />
-            <p className="text-sm text-gray-500 mt-1">
-              Please provide your complete address for delivery
+          <div className="space-y-4">
+            <h3 className="text-lg font-semibold text-gray-900">Delivery Address</h3>
+            
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                House/Flat/Shop No
+              </label>
+              <input
+                type="text"
+                value={houseNo}
+                onChange={(e) => setHouseNo(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="Enter house/flat number (optional)"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Street/Road Name *
+              </label>
+              <input
+                type="text"
+                required
+                value={streetName}
+                onChange={(e) => setStreetName(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="Enter street name"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Area/Landmark
+              </label>
+              <input
+                type="text"
+                value={areaLandmark}
+                onChange={(e) => setAreaLandmark(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="Enter area or landmark (optional)"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Village/City Name *
+              </label>
+              <input
+                type="text"
+                required
+                value={villageName}
+                onChange={(e) => setVillageName(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="Enter village or city name"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                PIN Code *
+              </label>
+              <input
+                type="text"
+                required
+                pattern="[0-9]{6}"
+                value={pinCode}
+                onChange={(e) => setPinCode(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="Enter 6-digit PIN code"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Nearby Location
+              </label>
+              <input
+                type="text"
+                value={nearbyLocation}
+                onChange={(e) => setNearbyLocation(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent"
+                placeholder="e.g., near temple, school, etc. (optional)"
+              />
+            </div>
+
+            <p className="text-sm text-gray-500">
+              * Required fields
             </p>
             <div className="mt-4">
               <label className="block text-sm font-medium text-gray-700 mb-2">Or use your current location</label>
@@ -268,7 +364,7 @@ export function Checkout({ shopLocation, onBack }: CheckoutProps) {
 
           <button
             type="submit"
-            disabled={loading || cart.length === 0 || !address.trim()}
+            disabled={loading || cart.length === 0 || !villageName.trim() || !streetName.trim() || !pinCode.trim()}
             className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-4 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-lg"
           >
             {loading ? 'Placing Order...' : 'Place Order'}

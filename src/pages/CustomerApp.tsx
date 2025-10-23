@@ -18,13 +18,11 @@ export function CustomerApp() {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(true);
   const [showCheckout, setShowCheckout] = useState(false);
-  // const [shopLocation, setShopLocation] = useState<ShopLocation | null>(null);
+  const [shopLocation, setShopLocation] = useState<import('../lib/supabase').ShopLocation | null>(null);
 
-  console.log('CustomerApp - showCheckout:', showCheckout);
-  // console.log('CustomerApp - shopLocation:', shopLocation);
+  // debug logs removed
 
   const handleCheckout = () => {
-    console.log('Setting showCheckout to true');
     setShowCheckout(true);
   };
 
@@ -33,7 +31,7 @@ export function CustomerApp() {
 
     // Subscribe to items changes
     const itemsChannel = supabase
-      .channel('customer-items-changes')
+      .channel()
       .on(
         'postgres_changes',
         {
@@ -116,7 +114,41 @@ export function CustomerApp() {
       }
 
       setCategories(categoriesRes.data || []);
-      setItems(itemsRes.data || []);
+      // Attach fallback variants: if an item has no variants, try to find another
+      // item with the same name and attach its variants client-side so the UI
+      // shows a size selector for customers without requiring a DB migration.
+      const loadedItems = itemsRes.data || [];
+      const itemsWithFallbackVariants = await (async (): Promise<(Item & { category: Category; variants: ItemVariant[] })[]> => {
+        try {
+          // Build a name -> variants map for items that do have variants
+          const nameMap: Record<string, ItemVariant[]> = {};
+          for (const it of loadedItems as (Item & { category: Category; variants: ItemVariant[] })[]) {
+            if (it.variants && Array.isArray(it.variants) && it.variants.length > 0) {
+              const name = (it.name || '').toString().trim().toLowerCase();
+              if (name) nameMap[name] = nameMap[name] || it.variants;
+            }
+          }
+
+          // For items missing variants, if a name match exists attach a cloned array
+          return (loadedItems as (Item & { category: Category; variants: ItemVariant[] })[]).map((it) => {
+            if ((!it.variants || it.variants.length === 0) && it.name) {
+              const match = nameMap[(it.name || '').toString().trim().toLowerCase()];
+              if (match && match.length > 0) {
+                // debug: attaching fallback variants for item
+                return { ...it, variants: match.map((v) => ({ ...v })) };
+              }
+            }
+            return it;
+          });
+        } catch {
+          return loadedItems as (Item & { category: Category; variants: ItemVariant[] })[];
+        }
+      })();
+
+  setItems(itemsWithFallbackVariants);
+  setShopLocation((shopLocationRes && shopLocationRes.data) ? (shopLocationRes.data as import('../lib/supabase').ShopLocation) : null);
+      // Debug: log variant counts so we can confirm UI should show selectors
+        // debug logging removed
       // setShopLocation(shopLocationRes.data);
 
     } catch (error: unknown) {
@@ -155,7 +187,7 @@ export function CustomerApp() {
   });
 
   if (showCheckout) {
-    return <Checkout shopLocation={null} onBack={() => setShowCheckout(false)} />;
+    return <Checkout shopLocation={shopLocation || null} onBack={() => setShowCheckout(false)} />;
   }
 
   return (

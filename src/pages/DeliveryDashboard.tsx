@@ -12,19 +12,24 @@ export default function DeliveryDashboard() {
     if (!user) return;
     setLoading(true);
     try {
-      console.debug('[DeliveryDashboard] loading assigned for user.id=', user.id, 'profile?.id=', profile?.id);
-  const { data: initialData, error: initialError } = await supabase.from('orders').select('*, order_items(*)').eq('delivery_boy_id', user.id).eq('status', 'accepted').neq('status', 'delivered').order('created_at', { ascending: false });
+  // loading assigned for user
+  // Only fetch orders explicitly assigned to this delivery user and exclude cancelled orders
+  const { data: initialData, error: initialError } = await supabase
+    .from('orders')
+    .select('*, order_items(*)')
+    .eq('delivery_boy_id', user.id)
+    .neq('status', 'cancelled')
+    .order('created_at', { ascending: false });
   if (initialError) throw initialError;
       // fallback: if no orders found for auth user id, try using profile.id (in case profile/auth id mismatch)
       let data = initialData;
       if ((!data || data.length === 0) && profile?.id && profile.id !== user.id) {
-        console.debug('[DeliveryDashboard] no orders for user.id, trying profile.id=', profile.id);
-        const res = await supabase.from('orders').select('*, order_items(*)').eq('delivery_boy_id', profile.id).eq('status', 'accepted').neq('status', 'delivered').order('created_at', { ascending: false });
+  const res = await supabase.from('orders').select('*, order_items(*)').eq('delivery_boy_id', profile.id).neq('status', 'cancelled').order('created_at', { ascending: false });
         if (res.error) throw res.error;
         data = res.data as typeof initialData;
       }
-      console.debug('[DeliveryDashboard] loaded assigned orders:', data);
-      setOrders(data || []);
+  // loaded assigned orders
+  setOrders((data as (Order & { order_items: OrderItem[] })[]) || []);
     } catch (err) {
       console.error('Failed loading assigned orders', err);
       alert('Failed to load orders');
@@ -38,8 +43,9 @@ export default function DeliveryDashboard() {
     loadAssigned();
 
     const channel = supabase
-      .channel('delivery_orders')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'orders', filter: `delivery_boy_id=eq.${user.id},status=eq.accepted` }, () => {
+      .channel()
+      .on('postgres_changes', { table: 'orders', filter: `delivery_boy_id=eq.${user.id},status=eq.accepted` }, () => {
+        // defensive: reload and enforce client-side that only orders assigned to this user are shown
         loadAssigned();
       })
       .subscribe();
@@ -58,6 +64,22 @@ export default function DeliveryDashboard() {
       supabase.removeChannel(channel);
     };
   }, [user, loadAssigned]);
+
+  // Client-side safety: ensure `orders` really belong to the current delivery user.
+  // This protects against cases where the realtime channel or adapter mis-parses filters
+  // and would otherwise surface unassigned or incorrectly-assigned orders.
+  useEffect(() => {
+    if (!user) return;
+    try {
+      const filtered = orders.filter(o => o.delivery_boy_id === user.id);
+      if (filtered.length !== orders.length) {
+  // filtered orders client-side to assigned user
+        setOrders(filtered);
+      }
+    } catch {
+      // client-side assignment filter failed
+    }
+  }, [orders, user]);
 
   const confirmDelivery = async (orderId: string, expectedPin?: string | null) => {
     // keep prompting until correct PIN or cancel
@@ -80,6 +102,18 @@ export default function DeliveryDashboard() {
         alert('Failed to confirm delivery');
         return;
       }
+    }
+  };
+
+  const acceptOrder = async (orderId: string) => {
+    try {
+      const { error } = await supabase.from('orders').update({ status: 'accepted' }).eq('id', orderId).eq('delivery_boy_id', user?.id);
+      if (error) throw error;
+      await loadAssigned();
+      alert('Order accepted');
+    } catch (err) {
+      console.error('Failed to accept order', err);
+      alert('Failed to accept order');
     }
   };
 
@@ -107,6 +141,9 @@ export default function DeliveryDashboard() {
                 </div>
                 <div className="text-right">
                   <p className="text-sm text-gray-500">Status: {order.status}</p>
+                  {order.status === 'pending' && order.delivery_boy_id === user?.id && (
+                    <button onClick={() => acceptOrder(order.id)} className="mt-2 bg-blue-600 text-white px-3 py-1 rounded mr-2">Accept Order</button>
+                  )}
                   <button onClick={() => confirmDelivery(order.id, order.delivery_pin)} className="mt-2 bg-emerald-600 text-white px-3 py-1 rounded">Confirm Delivery (enter PIN)</button>
                 </div>
               </div>

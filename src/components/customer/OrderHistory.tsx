@@ -4,6 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { supabase, Order, OrderItem } from '../../lib/supabase';
 import { Package, MapPin, Clock, CheckCircle, XCircle, TruckIcon } from 'lucide-react';
 import { formatDistance } from '../../lib/location';
+import { sortOrdersByDate, formatOrderDate } from '../../utils/orders';
 
 export function OrderHistory() {
   const { user } = useAuth();
@@ -16,14 +17,18 @@ export function OrderHistory() {
 
     setLoading(true);
     try {
+      // Get all orders for this customer sorted by created_at in descending order (newest first)
       const { data, error } = await supabase
         .from('orders')
         .select('*, order_items(*)')
         .eq('customer_id', user.id)
-        .order('created_at', { ascending: false });
-
+        .get();
+      
       if (error) throw error;
-      setOrders(data || []);
+
+      // Sort orders by created_at in descending order (newest first)
+      const sortedOrders = sortOrdersByDate(data || []);
+      setOrders(sortedOrders as (Order & { order_items: OrderItem[] })[]);
     } catch (error) {
       console.error('Error loading orders:', error);
       alert('Failed to load orders');
@@ -50,67 +55,107 @@ export function OrderHistory() {
   };
 
   const confirmModalAction = async () => {
-    if (!modalAction || !modalOrderId) return closeModal();
+    if (!modalAction || !modalOrderId || !user) return closeModal();
+    
     try {
+      // Only operate on this specific order for this specific user
       if (modalAction === 'cancel') {
-        const { error } = await supabase.from('orders').update({ status: 'cancelled', delivery_boy_id: null }).eq('id', modalOrderId);
-        if (error) throw error;
+        // cancelling order
+        const res = await supabase
+          .from('orders')
+          .update({ status: 'cancelled', delivery_boy_id: null })
+          .eq('id', modalOrderId)
+          .eq('customer_id', user.id)
+          .select();
+          // cancel response handled
+        if (res.error) throw res.error;
+        
+        // Update this specific order in local state
+        setOrders(prevOrders => 
+          prevOrders.map(order => 
+            order.id === modalOrderId
+              ? { ...order, status: 'cancelled', delivery_boy_id: null }
+              : order
+          )
+        );
       } else if (modalAction === 'delete') {
-        const { error } = await supabase.from('orders').delete().eq('id', modalOrderId);
-        if (error) throw error;
+          // deleting order
+          const res = await supabase
+            .from('orders')
+            .delete()
+            .eq('id', modalOrderId)
+            .eq('customer_id', user.id)
+            .select();
+          // delete response handled
+          if (res.error) throw res.error;
+        
+        // Remove just this order from local state and maintain sort order
+        setOrders(prevOrders => 
+          prevOrders
+            .filter(order => order.id !== modalOrderId)
+            .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+        );
       }
-      try {
-        localStorage.setItem('order_updated_at', Date.now().toString());
-        window.dispatchEvent(new CustomEvent('order_updated'));
-      } catch (e) {
-        console.debug('Failed to signal order change', e);
-      }
-      await loadOrders();
     } catch (err) {
-      console.error('Failed to perform action', err);
+      console.error('Failed to perform action:', err);
       alert('Failed to perform action');
     } finally {
       closeModal();
     }
-  };
+  };  useEffect(() => {
+    if (!user) return;
+    
+    // Load orders initially
+    loadOrders();
 
-  useEffect(() => {
-    if (user) {
-      loadOrders();
+    // Subscribe to changes for this customer's orders
+    const channel = supabase
+      .channel()
+      .on(
+        'change',
+        { 
+          table: 'orders',
+          filter: `customer_id.eq.${user.id}`
+        },
+        () => {
+          // On any change, just reload this user's orders
+          loadOrders();
+        }
+      )
+      .subscribe();
 
-      const channel = supabase
-        .channel('customer_orders_changes')
-        .on(
-          'postgres_changes',
-          {
-            event: '*',
-            schema: 'public',
-            table: 'orders',
-            filter: `customer_id=eq.${user.id}`,
-          },
-          () => {
-            loadOrders();
-          }
-        )
-        .subscribe();
-
-      return () => {
-        supabase.removeChannel(channel);
-      };
-    }
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, [user, loadOrders]);
 
   // Listen for owner edits and storage events that include a JSON payload
   useEffect(() => {
     const handleEdited = (detail?: CustomEvent) => {
-      const raw = detail?.detail ?? (localStorage.getItem('order_edited_payload') ? JSON.parse(localStorage.getItem('order_edited_payload') as string) : null);
+      const raw =
+        detail?.detail ??
+        (localStorage.getItem('order_edited_payload')
+          ? JSON.parse(localStorage.getItem('order_edited_payload') as string)
+          : null);
       if (!raw || !raw.orderId) return;
+
       const orderId = String(raw.orderId);
-  const changes = (raw.changes || []).map((c: { item_name?: string; oldQty?: number; newQty?: number }) => ({ item_name: String(c.item_name || ''), oldQty: Number(c.oldQty || 0), newQty: Number(c.newQty || 0) }));
-  const lines = changes.map((c: { item_name: string; oldQty: number; newQty: number }) => `${c.item_name}: ${c.oldQty} → ${c.newQty}`);
-      const message = lines.length > 0 ? `Shop owner updated your order: ${lines.join('; ')}` : 'Shop owner updated your order';
-      setOrderNotifications((prev) => ({ ...prev, [orderId]: { message, changes, newTotal: raw.newTotal } }));
-      // If serverOrder is present in payload, replace the local order so UI shows exact server values
+      const changes = (raw.changes || []).map((c: { item_name?: string; oldQty?: number; newQty?: number }) => ({
+        item_name: String(c.item_name || ''),
+        oldQty: Number(c.oldQty || 0),
+        newQty: Number(c.newQty || 0),
+      }));
+      const lines = changes.map((c) => `${c.item_name}: ${c.oldQty} → ${c.newQty}`);
+      const message =
+        lines.length > 0
+          ? `Shop owner updated your order: ${lines.join('; ')}`
+          : 'Shop owner updated your order';
+      setOrderNotifications((prev) => ({
+        ...prev,
+        [orderId]: { message, changes, newTotal: raw.newTotal },
+      }));
+
+      // ✅ Properly closed block
       if (raw.serverOrder && raw.serverOrder.id === orderId) {
         try {
           const server = raw.serverOrder as Order & { order_items: OrderItem[] };
@@ -119,6 +164,7 @@ export function OrderHistory() {
           // ignore malformed serverOrder
         }
       }
+
       // auto-clear after 10s
       setTimeout(() => {
         setOrderNotifications((prev) => {
@@ -127,7 +173,8 @@ export function OrderHistory() {
           return next;
         });
       }, 10000);
-      // reload that order
+
+      // reload orders
       loadOrders();
     };
 
@@ -136,7 +183,7 @@ export function OrderHistory() {
       if (e.key === 'order_updated_at') loadOrders();
     };
 
-    const onCustom = (e: Event) => handleEdited((e as CustomEvent).detail ? (e as CustomEvent) : undefined);
+    const onCustom = (e: Event) => handleEdited((e as CustomEvent) ?? undefined);
 
     window.addEventListener('storage', onStorage);
     window.addEventListener('order_updated', onCustom as EventListener);
@@ -146,6 +193,7 @@ export function OrderHistory() {
       window.removeEventListener('order_updated', onCustom as EventListener);
     };
   }, [loadOrders]);
+
 
   // loadOrders is declared above using useCallback
 
@@ -196,8 +244,14 @@ export function OrderHistory() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-12">
-        <div className="text-gray-600">Loading orders...</div>
+      <div className="bg-white rounded-xl shadow-sm p-12">
+        <div className="flex items-center justify-center">
+          <svg className="animate-spin h-8 w-8 text-emerald-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+          </svg>
+          <span className="ml-3 text-lg text-gray-700">Loading orders...</span>
+        </div>
       </div>
     );
   }
@@ -239,7 +293,14 @@ export function OrderHistory() {
                     Order #{order.order_number}
                   </h3>
                   <p className="text-sm text-gray-500">
-                    {new Date(order.created_at).toLocaleString()}
+                    {new Date(order.created_at).toLocaleString('en-US', {
+                      year: 'numeric',
+                      month: 'short',
+                      day: 'numeric',
+                      hour: '2-digit',
+                      minute: '2-digit',
+                      hour12: true
+                    })}
                   </p>
                 </div>
                 <div className="text-right">
@@ -271,7 +332,7 @@ export function OrderHistory() {
                   <span>{order.delivery_address}</span>
                 </div>
                 <p className="text-xs text-gray-500 ml-6">
-                  Distance: {formatDistance(order.distance_km)}
+                  Distance: {order.distance_km ? formatDistance(order.distance_km) : 'Not available'}
                 </p>
               </div>
 

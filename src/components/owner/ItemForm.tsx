@@ -24,37 +24,90 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
   const [variants, setVariants] = useState<VariantInput[]>([]);
   const [loading, setLoading] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [foundVariantsFromOther, setFoundVariantsFromOther] = useState<{ sourceItemId: string; variants: Array<any> } | null>(null);
 
   const loadVariants = useCallback(async () => {
     if (!item) return;
+  // debug log removed
     try {
       const { data, error } = await supabase
         .from('item_variants')
         .select('*')
-        .eq('item_id', item.id);
+        .eq('item_id', item.id)
+        .get();
 
+  // debug log removed
       if (error) throw error;
-
+      const docs = (data || []) as Array<{ id?: string; quantity_unit: string; price: number; stock?: number }>;
       setVariants(
-        data.map((v) => ({
+        docs.map((v) => ({
           id: v.id,
           quantity_unit: v.quantity_unit,
           price: v.price.toString(),
           stock: (v.stock ?? 0).toString(),
         }))
       );
+
+      // If no variants found, try to find another item with same name and load its variants as a candidate
+      if ((!data || (Array.isArray(data) && data.length === 0)) && item.name) {
+        try {
+          const otherItemsRes = await supabase.from('items').select('*').eq('name', item.name).get();
+          if (!otherItemsRes.error) {
+            const others = otherItemsRes.data || [];
+            const alt = (others as any[]).find((o) => o.id !== item.id);
+            if (alt) {
+              const altVarsRes = await supabase.from('item_variants').select('*').eq('item_id', alt.id).get();
+              if (!altVarsRes.error && Array.isArray(altVarsRes.data) && altVarsRes.data.length > 0) {
+                setFoundVariantsFromOther({ sourceItemId: alt.id, variants: altVarsRes.data as any[] });
+              }
+            }
+          }
+        } catch {
+          // variant fallback search failed; ignore in production
+        }
+      } else {
+        setFoundVariantsFromOther(null);
+      }
     } catch (err) {
       console.error('Error loading variants:', err);
     }
   }, [item]);
 
+  const copyVariantsFromOther = async () => {
+    if (!foundVariantsFromOther || !item) return;
+    try {
+      const rows = foundVariantsFromOther.variants.map((v) => ({
+        item_id: item.id,
+        quantity_unit: v.quantity_unit,
+        price: v.price,
+        stock: v.stock ?? 0,
+      }));
+      const { error } = await supabase.from('item_variants').insert(rows);
+      if (error) throw error;
+      // reload variants
+      await loadVariants();
+      setFoundVariantsFromOther(null);
+      alert('Copied variants to this item');
+    } catch (err) {
+      console.error('Failed to copy variants:', err);
+      alert('Failed to copy variants: ' + String(err));
+    }
+  };
+
   useEffect(() => {
     if (item) {
-      loadVariants();
+      // If the item already contains variants (joined), use them immediately.
+      if ((item as any).variants && Array.isArray((item as any).variants) && (item as any).variants.length > 0) {
+        setVariants((item as any).variants.map((v: any) => ({ id: v.id, quantity_unit: v.quantity_unit, price: (v.price ?? '').toString(), stock: ((v.stock ?? 0) as number).toString() })));
+      } else {
+        loadVariants();
+      }
     } else {
       setVariants([{ quantity_unit: '', price: '' }]);
     }
   }, [item, loadVariants]);
+
+  // Debug panel removed per cleanup: variants state is still loaded by loadVariants()
 
   // duplicate loadVariants removed (useCallback version above is used)
 
@@ -69,18 +122,10 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
 
     setUploading(true);
     try {
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${Math.random()}.${fileExt}`;
-      const filePath = `items/${fileName}`;
-
-      const { error: uploadError } = await supabase.storage
-        .from('images')
-        .upload(filePath, file);
-
-      if (uploadError) throw uploadError;
-
-      const { data } = supabase.storage.from('images').getPublicUrl(filePath);
-      setImageUrl(data.publicUrl);
+  // NOTE: storage is not implemented in the Firebase adapter. Use a local
+  // object URL as a temporary preview; in production replace this with
+  // proper storage integration.
+  setImageUrl(URL.createObjectURL(file));
     } catch (err: unknown) {
       console.error('Error uploading image:', err);
       // Supabase may return StorageApiError: Bucket not found
@@ -119,17 +164,22 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
       return;
     }
 
-    if (variants.length === 0 || variants.some((v) => !v.quantity_unit || !v.price)) {
-      alert('Please add at least one valid variant');
+    // Check if there are any partially filled variants that might be mistakes
+    if (variants.some(v => (v.quantity_unit && !v.price) || (!v.quantity_unit && v.price))) {
+      alert('You have variants with missing price or quantity unit. Please complete or remove them.');
       return;
     }
+
+    // Filter out empty variants
+    const validVariants = variants.filter(v => v.quantity_unit || v.price);
+    setVariants(validVariants);
 
     setLoading(true);
     try {
       let itemId = item?.id;
 
       if (item) {
-        const { error } = await supabase
+        const updRes = await supabase
           .from('items')
           .update({
             name,
@@ -138,19 +188,22 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
             image_url: imageUrl,
             in_stock: inStock,
           })
-          .eq('id', item.id);
+          .eq('id', item.id)
+          .get();
 
-        if (error) throw error;
+        if (updRes.error) throw updRes.error;
 
         // Load existing variants to detect deletions
         const { data: existingVariants, error: loadErr } = await supabase
           .from('item_variants')
           .select('id')
-          .eq('item_id', item.id);
+          .eq('item_id', item.id)
+          .get();
 
-        if (loadErr) throw loadErr;
+    if (loadErr) throw loadErr;
 
-  const existingIds: string[] = (existingVariants || []).map((v: { id: string }) => v.id);
+    const existingDocs = (existingVariants || []) as Array<{ id?: string }>;
+    const existingIds: string[] = existingDocs.map((v) => v.id || '').filter(Boolean) as string[];
         const updatedIds: string[] = variants.filter((v) => v.id).map((v) => v.id as string);
 
         // IDs that would be deleted
@@ -158,11 +211,13 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
 
         if (idsToDelete.length > 0) {
           // Check if any of these variant IDs are referenced in order_items
+
           const { data: refs, error: refsErr } = await supabase
             .from('order_items')
             .select('variant_id,order_id')
             .in('variant_id', idsToDelete)
-            .limit(1);
+            .limit(1)
+            .get();
 
           if (refsErr) throw refsErr;
 
@@ -176,28 +231,21 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           }
 
           // Safe to delete the unreferenced variants
-          const { error: deleteError } = await supabase
-            .from('item_variants')
-            .delete()
-            .in('id', idsToDelete);
-
-          if (deleteError) throw deleteError;
+          const delRes = await supabase.from('item_variants').delete().in('id', idsToDelete).get();
+          if (delRes.error) throw delRes.error;
         }
       } else {
-        const { data, error } = await supabase
-          .from('items')
-          .insert({
-            name,
-            description,
-            category_id: categoryId,
-            image_url: imageUrl,
-            in_stock: inStock,
-          })
-          .select()
-          .single();
+        const insertRes = await supabase.from('items').insert({
+          name,
+          description,
+          category_id: categoryId,
+          image_url: imageUrl,
+          in_stock: inStock,
+        });
 
-        if (error) throw error;
-        itemId = data.id;
+        if (insertRes.error) throw insertRes.error;
+        if (!insertRes.data || insertRes.data.length === 0) throw new Error('Insert failed');
+        itemId = insertRes.data[0].id;
       }
 
       // Separate new variants (no id) and existing variants (with id)
@@ -220,18 +268,63 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
           stock: parseInt((v.stock ?? '0') as string, 10) || 0,
         }));
 
-      // Insert new variants
+      // Helper that attempts an insert and retries without `stock` if the
+      // PostgREST schema cache doesn't include the column (PGRST204).
+  const tryInsertWithStockFallback = async (rows: Array<Record<string, unknown>>) => {
+        try {
+          const res = await supabase.from('item_variants').insert(rows);
+          if (res.error) throw res.error;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : JSON.stringify(err);
+          // PostgREST returns PGRST204 when a requested column is missing from cache
+          if (msg.includes("Could not find the 'stock' column") || msg.includes('PGRST204')) {
+            // retry without stock property
+            const rowsNoStock = rows.map((r) => {
+              const copy = { ...r } as Record<string, unknown>;
+              delete copy.stock;
+              return copy;
+            });
+            const retryRes = await supabase.from('item_variants').insert(rowsNoStock);
+            if (retryRes.error) throw retryRes.error;
+            // Inform the owner that stock values were not saved because the DB
+            // schema/cache doesn't include the `stock` column yet.
+            alert('Item saved, but stock values were not stored because the database schema is missing the `stock` column or the REST schema cache is stale. Please apply migrations and restart/redeploy your Supabase project to enable stock tracking.');
+          } else {
+            throw err;
+          }
+        }
+      };
+
+      // Helper that attempts an upsert and retries without `stock` on the same error
+  const tryUpsertWithStockFallback = async (rows: Array<Record<string, unknown>>) => {
+        try {
+          const upRes = await supabase.from('item_variants').upsert(rows, { onConflict: 'id' }).get();
+          if (upRes.error) throw upRes.error;
+        } catch (err: unknown) {
+          const msg = err instanceof Error ? err.message : JSON.stringify(err);
+          if (msg.includes("Could not find the 'stock' column") || msg.includes('PGRST204')) {
+            const rowsNoStock = rows.map((r) => {
+              const copy = { ...r } as Record<string, unknown>;
+              delete copy.stock;
+              return copy;
+            });
+            const retryUp = await supabase.from('item_variants').upsert(rowsNoStock, { onConflict: 'id' }).get();
+            if (retryUp.error) throw retryUp.error;
+            alert('Item updated, but stock values were not saved because the database schema is missing the `stock` column or the REST schema cache is stale. Please apply migrations and restart/redeploy your Supabase project to enable stock tracking.');
+          } else {
+            throw err;
+          }
+        }
+      };
+
+      // Insert new variants with fallback
       if (newVariants.length > 0) {
-        const { error: insertErr } = await supabase.from('item_variants').insert(newVariants);
-        if (insertErr) throw insertErr;
+        await tryInsertWithStockFallback(newVariants);
       }
 
-      // Upsert existing variants (id present)
+      // Upsert existing variants (id present) with fallback
       if (existingVariants.length > 0) {
-        const { error: upsertErr } = await supabase
-          .from('item_variants')
-          .upsert(existingVariants, { onConflict: 'id' });
-        if (upsertErr) throw upsertErr;
+        await tryUpsertWithStockFallback(existingVariants);
       }
 
       alert(item ? 'Item updated successfully!' : 'Item added successfully!');
@@ -396,6 +489,30 @@ export function ItemForm({ item, categories, onClose }: ItemFormProps) {
               </div>
             ))}
           </div>
+          {item && (
+            <>
+              {foundVariantsFromOther && (
+                <div className="mt-3 p-3 bg-yellow-50 border rounded">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm">Found variants from another item (id: {foundVariantsFromOther.sourceItemId})</div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => copyVariantsFromOther()}
+                        className="text-sm bg-emerald-600 text-white px-3 py-1 rounded"
+                      >Copy variants to this item</button>
+                      <button
+                        type="button"
+                        onClick={() => setFoundVariantsFromOther(null)}
+                        className="text-sm bg-gray-200 px-3 py-1 rounded"
+                      >Dismiss</button>
+                    </div>
+                  </div>
+                  <pre className="text-xs max-h-40 overflow-auto">{JSON.stringify(foundVariantsFromOther.variants, null, 2)}</pre>
+                </div>
+              )}
+            </>
+          )}
         </div>
 
         <div className="flex items-center gap-2">

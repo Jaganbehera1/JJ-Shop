@@ -11,6 +11,7 @@ export function OwnerDashboard() {
   const { signOut, profile } = useAuth();
   const [activeTab, setActiveTab] = useState<'items' | 'orders'>('items');
   const [shopLocation, setShopLocation] = useState<ShopLocation | null>(null);
+  const [hasShopLocation, setHasShopLocation] = useState(false);
   const [settingLocation, setSettingLocation] = useState(false);
 
   useEffect(() => {
@@ -18,6 +19,13 @@ export function OwnerDashboard() {
       if (!profile) return;
 
       try {
+        // If we've previously set the shop location, stored in localStorage, avoid re-prompting.
+        const localFlag = localStorage.getItem(`shop_location_set_${profile.id}`);
+        if (localFlag) {
+          setHasShopLocation(true);
+          // still attempt to load the real record in background
+        }
+
         const { data, error } = await supabase
           .from('shop_location')
           .select('*')
@@ -28,7 +36,11 @@ export function OwnerDashboard() {
 
         if (error) throw error;
 
-        if (data) setShopLocation(data);
+        if (data) {
+          setShopLocation(data as ShopLocation);
+          setHasShopLocation(true);
+          try { localStorage.setItem(`shop_location_set_${profile.id}`, '1'); } catch { /* ignore localStorage errors */ }
+        }
       } catch (error: unknown) {
         console.error('Error loading shop location:', error);
       }
@@ -62,7 +74,9 @@ export function OwnerDashboard() {
         .single();
 
       if (error) throw error;
-      setShopLocation(data);
+  setShopLocation(data as ShopLocation);
+  setHasShopLocation(true);
+  try { localStorage.setItem(`shop_location_set_${profile.id}`, '1'); } catch { /* ignore localStorage errors */ }
       alert('Shop location set successfully!');
     } catch (error: unknown) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -102,7 +116,8 @@ export function OwnerDashboard() {
       </header>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {!shopLocation ? (
+
+  {!(hasShopLocation || shopLocation) ? (
           <div className="bg-white rounded-xl shadow-sm p-8 text-center">
             <MapPin className="w-16 h-16 text-emerald-600 mx-auto mb-4" />
             <h2 className="text-2xl font-bold text-gray-900 mb-2">
