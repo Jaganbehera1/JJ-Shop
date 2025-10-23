@@ -14,8 +14,6 @@ export default function Header() {
           <div className="flex items-center gap-4">
             <a href="/" className="text-xl font-bold text-emerald-600">Grocery</a>
             <nav className="hidden sm:flex gap-3">
-              <a href="#" className="text-sm text-gray-700 hover:text-emerald-600">Browse</a>
-              <a href="#" className="text-sm text-gray-700 hover:text-emerald-600">Orders</a>
             </nav>
           </div>
 
