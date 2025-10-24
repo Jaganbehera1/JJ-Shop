@@ -346,14 +346,14 @@ const loadOrders = useCallback(async () => {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 gap-4">
         <h2 className="text-2xl font-bold text-gray-900">Orders</h2>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
           {(['all', 'pending', 'accepted', 'delivered', 'cancelled'] as const).map((status) => (
             <button
               key={status}
               onClick={() => setFilter(status)}
-              className={`px-4 py-2 rounded-lg font-medium capitalize transition-colors ${
+              className={`flex-1 sm:flex-none px-4 py-2 rounded-lg font-medium capitalize transition-colors ${
                 filter === status
                   ? 'bg-emerald-600 text-white'
                   : 'bg-white text-gray-700 hover:bg-gray-50'
@@ -386,9 +386,9 @@ const loadOrders = useCallback(async () => {
               key={order.id}
               className="bg-white rounded-xl shadow-sm p-6 hover:shadow-md transition-shadow"
             >
-              <div className="flex items-start justify-between mb-4">
+              <div className="flex flex-col sm:flex-row items-start justify-between mb-4 gap-4">
                 <div>
-                  <div className="flex items-center gap-3 mb-2">
+                  <div className="flex flex-wrap items-center gap-3 mb-2">
                     <h3 className="text-lg font-bold text-gray-900">
                       Order #{order.order_number}
                     </h3>
@@ -414,7 +414,7 @@ const loadOrders = useCallback(async () => {
                       : 'Processing...'}
                   </p>
                 </div>
-                <div className="text-right">
+                <div className="sm:text-right w-full sm:w-auto">
                   <p className="text-2xl font-bold text-emerald-600">
                     ₹{order.total_amount.toFixed(2)}
                   </p>
@@ -484,14 +484,14 @@ const loadOrders = useCallback(async () => {
               </div>
 
               {order.status !== 'delivered' && (
-                <div className="px-6 pb-6">
-                  <div className="flex items-center gap-4 mb-3">
-                    <div>
+                <div className="px-3 sm:px-6 pb-6">
+                  <div className="flex flex-col sm:flex-row items-start gap-4 mb-3">
+                    <div className="w-full sm:w-auto">
                       <p className="text-sm text-gray-600">Delivery PIN</p>
                       <p className="font-mono text-lg text-gray-900">{order.delivery_pin ?? '—'}</p>
                     </div>
 
-                    <div className="flex-1">
+                    <div className="flex-1 w-full">
                       <label className="block text-sm text-gray-600">Assign Delivery Boy</label>
                       <select
                         value={order.delivery_boy_id ?? ''}
@@ -514,7 +514,7 @@ const loadOrders = useCallback(async () => {
                       )}
                     </div>
 
-                    <div className="w-48">
+                    <div className="w-full sm:w-48">
                       <button
                         onClick={() => tryMarkDeliveredWithPin(order.id, order.delivery_pin)}
                         className="w-full bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg"
@@ -552,7 +552,7 @@ const loadOrders = useCallback(async () => {
               )}
 
               {(order.status === 'pending') && (
-                <div className="flex gap-3">
+                <div className="flex flex-col sm:flex-row gap-3">
                   <button
                     onClick={() => updateOrderStatus(order.id, 'accepted')}
                     className="flex-1 flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg font-semibold transition-colors"
