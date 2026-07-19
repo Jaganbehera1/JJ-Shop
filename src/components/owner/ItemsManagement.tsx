@@ -45,12 +45,15 @@ export function ItemsManagement() {
   const its = (itemsRes?.data || []) as (Item & { category: Category; variants: ItemVariant[] })[];
   // removed debug logs
 
-      // If there are no categories in Firestore yet, insert a small default set
+      const hasHandicraftCategory = cats.some((cat) => (cat.name || '').toLowerCase() === 'handicraft');
+
+      // If there are no categories in the database yet, insert a small default set.
+      // If Handicraft is missing from an existing list, add it so it appears in the form dropdown.
       if (Array.isArray(cats) && cats.length === 0) {
         console.info('[ItemsManagement] no categories found — seeding defaults');
         try {
           const defaultCats = [
-            { name: 'Rice' },
+            { name: 'Handicraft' },
             { name: 'Pulses' },
             { name: 'Oils' },
             { name: 'Spices' },
@@ -58,17 +61,30 @@ export function ItemsManagement() {
             { name: 'Dairy' },
             { name: 'Snacks' },
             { name: 'Beverages' },
+            { name: 'Rice' },
           ];
           const insertRes = await supabase.from('categories').upsert(defaultCats as Partial<Category>[]).get();
           if (insertRes.error) {
             console.warn('[ItemsManagement] failed to seed categories', insertRes.error);
           } else {
-            // re-fetch categories
             const refetch = await supabase.from('categories').select('*').order('name').get();
             cats = (refetch?.data || []) as Category[];
           }
         } catch {
           console.warn('[ItemsManagement] seed error');
+        }
+      } else if (!hasHandicraftCategory) {
+        console.info('[ItemsManagement] adding missing Handicraft category');
+        try {
+          const insertRes = await supabase.from('categories').upsert([{ name: 'Handicraft' }] as Partial<Category>[]).get();
+          if (insertRes.error) {
+            console.warn('[ItemsManagement] failed to add Handicraft category', insertRes.error);
+          } else {
+            const refetch = await supabase.from('categories').select('*').order('name').get();
+            cats = (refetch?.data || []) as Category[];
+          }
+        } catch {
+          console.warn('[ItemsManagement] add Handicraft error');
         }
       }
 
